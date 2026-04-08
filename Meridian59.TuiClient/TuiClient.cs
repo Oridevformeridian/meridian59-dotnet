@@ -795,8 +795,13 @@ namespace Meridian59.TuiClient
             return true;
         }
 
+        private DateTime nextMoveAt = DateTime.MinValue;
+
         private void Move(int dx, int dy, ushort angle)
         {
+            if (DateTime.Now < nextMoveAt) return;
+            nextMoveAt = DateTime.Now.AddMilliseconds(100);
+
             var avatar = Data.AvatarObject;
             if (avatar == null) return;
 
@@ -808,11 +813,11 @@ namespace Meridian59.TuiClient
 
             if (isNoClip)
             {
-                // Noclip mode: Direct teleport
+                // Noclip mode: Direct teleport (16 units)
                 ushort origX = avatar.CoordinateX;
                 ushort origY = avatar.CoordinateY;
-                ushort newX = (ushort)Math.Clamp((int)origX + dx * 64, 0, 65535);
-                ushort newY = (ushort)Math.Clamp((int)origY + dy * 64, 0, 65535);
+                ushort newX = (ushort)Math.Clamp((int)origX + dx * 16, 0, 65535);
+                ushort newY = (ushort)Math.Clamp((int)origY + dy * 16, 0, 65535);
                 avatar.CoordinateX = newX;
                 avatar.CoordinateY = newY;
                 byte origSpeed = (byte)avatar.HorizontalSpeed;
@@ -828,7 +833,7 @@ namespace Meridian59.TuiClient
                 if (direction.LengthSquared > 0.001f)
                     direction.Normalize();
 
-                float remaining = 64.0f; // 1 full tile
+                float remaining = 16.0f; // 1/4 tile per press
                 float stepSize = 4.0f;   // Start with 4-unit steps
                 bool movedAtAll = false;
 
@@ -857,11 +862,11 @@ namespace Meridian59.TuiClient
                 if (!movedAtAll)
                 {
                     // If blocked at start, try a "boundary push"
-                    // Move 4 units without collision check to trigger room transition
+                    // Move 2 units without collision check to trigger room transition
                     ushort origX = avatar.CoordinateX;
                     ushort origY = avatar.CoordinateY;
-                    avatar.CoordinateX = (ushort)Math.Clamp((int)origX + dx * 4, 0, 65535);
-                    avatar.CoordinateY = (ushort)Math.Clamp((int)origY + dy * 4, 0, 65535);
+                    avatar.CoordinateX = (ushort)Math.Clamp((int)origX + dx * 2, 0, 65535);
+                    avatar.CoordinateY = (ushort)Math.Clamp((int)origY + dy * 2, 0, 65535);
                     byte os = (byte)avatar.HorizontalSpeed;
                     avatar.HorizontalSpeed = 16;
                     SendReqMoveMessage(true);
