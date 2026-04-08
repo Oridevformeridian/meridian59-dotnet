@@ -1136,7 +1136,9 @@ namespace Meridian59.Data
             // update 1. person playeroverlays
             for (int i = PlayerOverlays.Count - 1; i >= 0; i--)
             {
+                if (i >= PlayerOverlays.Count) continue;
                 PlayerOverlay ov = PlayerOverlays[i];
+                if (ov == null) continue;
 
                 // update this tick
                 ov.Tick(Tick, Span);
