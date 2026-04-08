@@ -12,6 +12,12 @@ using Meridian59.Protocol.GameMessages;
 using Meridian59.Common.Enums;
 using Meridian59.Common;
 
+#if X64
+using Real = System.Double;
+#else
+using Real = System.Single;
+#endif
+
 namespace Meridian59.TuiClient
 {
     /// <summary>
@@ -763,70 +769,109 @@ namespace Meridian59.TuiClient
 
         private bool isNoClip = false;
 
+        private bool DoFineStep(Meridian59.Common.V2 direction, float worldDist)
+        {
+            var avatar = Data.AvatarObject;
+            if (avatar == null || CurrentRoom == null) return false;
+
+            var start2D = avatar.Position2D;
+            var targetEnd = start2D + (direction * (Real)worldDist);
+
+            var rooStart = avatar.Position3D.Clone();
+            rooStart.ConvertToROO();
+            
+            // ROO coords are (World * 16) - 1024
+            var rooEnd2D = new Meridian59.Common.V2(targetEnd.X * 16.0f - 1024.0f, targetEnd.Y * 16.0f - 1024.0f);
+
+            var allowedROO = CurrentRoom.VerifyMove(ref rooStart, ref rooEnd2D, 50);
+
+            if (allowedROO.LengthSquared < 0.000001f) return false;
+
+            // Apply movement (including any sliding from VerifyMove)
+            allowedROO.Scale(0.0625f);
+            var finalPos = start2D + allowedROO;
+            avatar.StartMoveTo(ref finalPos, 50);
+            avatar.UpdatePosition(10, Data.RoomInformation);
+            return true;
+        }
+
         private void Move(int dx, int dy, ushort angle)
         {
             var avatar = Data.AvatarObject;
-            if (avatar == null)
-            {
-                Log("DEBUG", "Move failed: Avatar is null");
-                return;
-            }
+            if (avatar == null) return;
 
             Log("SYS", $"Moving: dir={dx},{dy} angle={angle} (Noclip={isNoClip})");
 
+            // Update angle immediately
+            avatar.AngleUnits = angle;
+            SendReqTurnMessage(true);
+
             if (isNoClip)
             {
-                // Noclip mode: Direct teleport/clipping
+                // Noclip mode: Direct teleport
                 ushort origX = avatar.CoordinateX;
                 ushort origY = avatar.CoordinateY;
-                ushort origAngle = avatar.AngleUnits;
-
-                // Move 64 units (1 full tile)
                 ushort newX = (ushort)Math.Clamp((int)origX + dx * 64, 0, 65535);
                 ushort newY = (ushort)Math.Clamp((int)origY + dy * 64, 0, 65535);
-
-                Log("DEBUG", $"Move (NOCLIP): ({origX},{origY}) -> ({newX},{newY}) angle={angle}");
-
                 avatar.CoordinateX = newX;
                 avatar.CoordinateY = newY;
-                avatar.AngleUnits = angle;
                 byte origSpeed = (byte)avatar.HorizontalSpeed;
                 avatar.HorizontalSpeed = 16;
                 SendReqMoveMessage(true);
                 avatar.CoordinateX = origX;
                 avatar.CoordinateY = origY;
-                avatar.AngleUnits = origAngle;
                 avatar.HorizontalSpeed = origSpeed;
             }
             else
             {
-                // Normal mode: Use TryMove which honors collisions
                 var direction = new Meridian59.Common.V2(dx, dy);
-                
-                // Update angle immediately so we turn
-                avatar.AngleUnits = angle;
-                SendReqTurnMessage(true);
+                if (direction.LengthSquared > 0.001f)
+                    direction.Normalize();
 
-                ushort preX = avatar.CoordinateX;
-                ushort preY = avatar.CoordinateY;
+                float remaining = 64.0f; // 1 full tile
+                float stepSize = 4.0f;   // Start with 4-unit steps
+                bool movedAtAll = false;
 
-                // Move ~64 units (one full tile). 
-                // Each TryMove call with 10ms span and speed 50 moves ~3.2 units.
-                // 20 calls = 64 units.
-                for (int i = 0; i < 20; i++)
+                while (remaining > 0.01f)
                 {
-                    TryMove(direction, true, 0);
-                    // Manually update position so the next iteration starts from the new position
-                    avatar.UpdatePosition(10, Data.RoomInformation);
+                    float dist = Math.Min(remaining, stepSize);
+                    if (DoFineStep(direction, dist))
+                    {
+                        remaining -= dist;
+                        movedAtAll = true;
+                    }
+                    else
+                    {
+                        if (stepSize > 0.0625f)
+                        {
+                            stepSize = 0.0625f; // Drop to 1 legacy unit granularity
+                        }
+                        else
+                        {
+                            // Blocked even at finest granularity
+                            break;
+                        }
+                    }
                 }
 
-                if (avatar.CoordinateX == preX && avatar.CoordinateY == preY)
+                if (!movedAtAll)
                 {
-                    Log("WARN", "Movement blocked by collision. (Try 'noclip' if stuck)");
+                    // If blocked at start, try a "boundary push"
+                    // Move 4 units without collision check to trigger room transition
+                    ushort origX = avatar.CoordinateX;
+                    ushort origY = avatar.CoordinateY;
+                    avatar.CoordinateX = (ushort)Math.Clamp((int)origX + dx * 4, 0, 65535);
+                    avatar.CoordinateY = (ushort)Math.Clamp((int)origY + dy * 4, 0, 65535);
+                    byte os = (byte)avatar.HorizontalSpeed;
+                    avatar.HorizontalSpeed = 16;
+                    SendReqMoveMessage(true);
+                    avatar.CoordinateX = origX;
+                    avatar.CoordinateY = origY;
+                    avatar.HorizontalSpeed = os;
+                    Log("SYS", "Attempting boundary snap...");
                 }
 
-                Log("DEBUG", $"Move (TryMove): Resulting Pos=({avatar.CoordinateX},{avatar.CoordinateY})");
-
+                Log("DEBUG", $"Move Result: Pos=({avatar.CoordinateX},{avatar.CoordinateY})");
             }
 
             if (isRecording)
