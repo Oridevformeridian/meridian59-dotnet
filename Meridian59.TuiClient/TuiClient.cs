@@ -608,6 +608,14 @@ namespace Meridian59.TuiClient
                 return;
             }
 
+            // noclip
+            if (text.Equals("noclip", StringComparison.OrdinalIgnoreCase))
+            {
+                isNoClip = !isNoClip;
+                Log("SYS", $"Noclip is now {(isNoClip ? "ON" : "OFF")}");
+                return;
+            }
+
             // move north/south/east/west
             if (text.StartsWith("move ", StringComparison.OrdinalIgnoreCase))
             {
@@ -753,46 +761,85 @@ namespace Meridian59.TuiClient
             }
         }
 
+        private bool isNoClip = false;
+
         private void Move(int dx, int dy, ushort angle)
         {
             var avatar = Data.AvatarObject;
-            if (avatar == null) return;
+            if (avatar == null)
+            {
+                Log("DEBUG", "Move failed: Avatar is null");
+                return;
+            }
 
-            // Save current server-authoritative position
-            ushort origX     = avatar.CoordinateX;
-            ushort origY     = avatar.CoordinateY;
-            ushort origAngle = avatar.AngleUnits;
+            Log("SYS", $"Moving: dir={dx},{dy} angle={angle} (Noclip={isNoClip})");
 
-            // Use smaller steps (16 instead of 64) for finer movement
-            // 16 units = 1 "fine" unit in Meridian
-            ushort newX = (ushort)Math.Clamp((int)origX + dx * 16, 0, 65535);
-            ushort newY = (ushort)Math.Clamp((int)origY + dy * 16, 0, 65535);
+            if (isNoClip)
+            {
+                // Noclip mode: Direct teleport/clipping
+                ushort origX = avatar.CoordinateX;
+                ushort origY = avatar.CoordinateY;
+                ushort origAngle = avatar.AngleUnits;
 
-            // Temporarily set desired coords so SendReqMoveMessage can read them, then restore.
-            // The server will confirm or rubberband via BP_Move.
-            // Using base.SendReqMoveMessage(true) also handles PI 223 SectorMove updates.
-            avatar.CoordinateX = newX;
-            avatar.CoordinateY = newY;
-            avatar.AngleUnits  = angle;
-            
-            // Set speed to something non-zero so base.SendReqMoveMessage doesn't abort
-            byte origSpeed = (byte)avatar.HorizontalSpeed;
-            avatar.HorizontalSpeed = 16; 
+                // Move 64 units (1 full tile)
+                ushort newX = (ushort)Math.Clamp((int)origX + dx * 64, 0, 65535);
+                ushort newY = (ushort)Math.Clamp((int)origY + dy * 64, 0, 65535);
 
-            SendReqMoveMessage(true);
+                Log("DEBUG", $"Move (NOCLIP): ({origX},{origY}) -> ({newX},{newY}) angle={angle}");
 
-            // Restore
-            avatar.CoordinateX = origX;
-            avatar.CoordinateY = origY;
-            avatar.AngleUnits  = origAngle;
-            avatar.HorizontalSpeed = origSpeed;
+                avatar.CoordinateX = newX;
+                avatar.CoordinateY = newY;
+                avatar.AngleUnits = angle;
+                byte origSpeed = (byte)avatar.HorizontalSpeed;
+                avatar.HorizontalSpeed = 16;
+                SendReqMoveMessage(true);
+                avatar.CoordinateX = origX;
+                avatar.CoordinateY = origY;
+                avatar.AngleUnits = origAngle;
+                avatar.HorizontalSpeed = origSpeed;
+            }
+            else
+            {
+                // Normal mode: Use TryMove which honors collisions
+                var direction = new Meridian59.Common.V2(dx, dy);
+                
+                // Update angle immediately so we turn
+                avatar.AngleUnits = angle;
+                SendReqTurnMessage(true);
+
+                ushort preX = avatar.CoordinateX;
+                ushort preY = avatar.CoordinateY;
+
+                // Move ~64 units (one full tile). 
+                // Each TryMove call with 10ms span and speed 50 moves ~3.2 units.
+                // 20 calls = 64 units.
+                for (int i = 0; i < 20; i++)
+                {
+                    TryMove(direction, true, 0);
+                    // Manually update position so the next iteration starts from the new position
+                    avatar.UpdatePosition(10, Data.RoomInformation);
+                }
+
+                if (avatar.CoordinateX == preX && avatar.CoordinateY == preY)
+                {
+                    Log("WARN", "Movement blocked by collision. (Try 'noclip' if stuck)");
+                }
+
+                Log("DEBUG", $"Move (TryMove): Resulting Pos=({avatar.CoordinateX},{avatar.CoordinateY})");
+
+            }
 
             if (isRecording)
-                recorder.Record("Move", avatar, $"X:{newX},Y:{newY},A:{angle}");
+                recorder.Record("Move", avatar, $"X:{avatar.CoordinateX},Y:{avatar.CoordinateY},A:{angle}");
         }
 
         public override void SendReqMoveMessage(bool ForceSend)
         {
+            var avatar = Data.AvatarObject;
+            if (avatar != null)
+            {
+                Log("DEBUG", $"SendReqMoveMessage: Force={ForceSend} X={avatar.CoordinateX} Y={avatar.CoordinateY} SS={lastRoomID}");
+            }
             base.SendReqMoveMessage(ForceSend);
         }
 
