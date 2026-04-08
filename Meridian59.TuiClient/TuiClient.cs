@@ -165,12 +165,34 @@ namespace Meridian59.TuiClient
                 Log("SYS", text);
         }
 
+        protected override void HandleGameMessage(Meridian59.Protocol.GameMessages.GameMessage Message)
+        {
+            // Log hex of the message for debugging
+            if (Message is Meridian59.Protocol.GameMessages.GenericGameMessage gen)
+            {
+                var hexBytes = gen.Data != null
+                    ? BitConverter.ToString(gen.Data).Replace("-", " ")
+                    : "(null)";
+                Log("NET", $"Unknown PI={Message.PI}: {hexBytes}");
+            }
+            else
+            {
+                // For known messages, we might want to see the raw data too
+                // Since base.HandleGameMessage might consume it, we just log the PI and type
+                // Log("NET", $"RECV: PI={Message.PI} ({Message.GetType().Name})");
+            }
+            base.HandleGameMessage(Message);
+        }
+
         protected override void HandleGameModeMessage(Meridian59.Protocol.GameMessages.GameModeMessage Message)
         {
             if (gameModeSince == DateTime.MinValue)
                 gameModeSince = DateTime.Now;
 
             var pi = (Meridian59.Protocol.Enums.MessageTypeGameMode)Message.PI;
+            
+            // Log every message for debugging
+            Log("NET", $"PI={Message.PI} ({pi})");
 
             if (pi == Meridian59.Protocol.Enums.MessageTypeGameMode.Player)
             {
@@ -204,13 +226,14 @@ namespace Meridian59.TuiClient
                 var c = (Meridian59.Protocol.GameMessages.CreateMessage)Message;
                 Log("NET", $"Create: obj={c.NewRoomObject?.ID} name={c.NewRoomObject?.Name} x={c.NewRoomObject?.CoordinateX} y={c.NewRoomObject?.CoordinateY}");
             }
-            else if (Message is Meridian59.Protocol.GameMessages.GenericGameMessage gen)
+            else if (pi == Meridian59.Protocol.Enums.MessageTypeGameMode.Spells)
             {
-                // Log unknown server messages as hex for analysis
-                var hexBytes = gen.Data != null
-                    ? BitConverter.ToString(gen.Data).Replace("-", " ")
-                    : "(null)";
-                Log("NET", $"Unknown PI={Message.PI}: {hexBytes}");
+                var s = (Meridian59.Protocol.GameMessages.SpellsMessage)Message;
+                Log("NET", $"Spells: Count={s.SpellObjects.Length}");
+                foreach (var spell in s.SpellObjects)
+                {
+                    Log("NET", $"  Spell: ID={spell.ID} Name={spell.Name} Targets={spell.TargetsCount}");
+                }
             }
 
             base.HandleGameModeMessage(Message);
@@ -571,12 +594,29 @@ namespace Meridian59.TuiClient
                 // the ROO file isn't loaded (bot/headless context).
                 ObjectID[] targets;
                 if (spell.TargetsCount > 0 && Data.AvatarObject != null)
+                {
                     targets = new[] { new ObjectID(Data.AvatarObject.ID) };
+                    Log("SYS", $"Casting: {spell.Name} (Target: Self {Data.AvatarObject.ID})");
+                }
                 else
+                {
                     targets = new ObjectID[0];
+                    Log("SYS", $"Casting: {spell.Name} (No Target)");
+                }
                 ServerConnection.SendQueue.Enqueue(
                     new Meridian59.Protocol.GameMessages.ReqCastMessage(spell.ID, targets));
-                Log("SYS", $"Casting: {spell.Name}");
+                return;
+            }
+
+            // move north/south/east/west
+            if (text.StartsWith("move ", StringComparison.OrdinalIgnoreCase))
+            {
+                string dir = text.Substring(5).Trim().ToLower();
+                if (dir == "n" || dir == "north") Move( 0, -1, 3072);
+                else if (dir == "s" || dir == "south") Move( 0,  1, 1024);
+                else if (dir == "e" || dir == "east") Move( 1,  0,    0);
+                else if (dir == "w" || dir == "west") Move(-1,  0, 2048);
+                else Log("SYS", $"Unknown direction: {dir}");
                 return;
             }
 
@@ -684,6 +724,10 @@ namespace Meridian59.TuiClient
                 case ConsoleKey.A: Move(-1,  0, 2048); break;
                 case ConsoleKey.D: Move( 1,  0,    0); break;
 
+                case ConsoleKey.Spacebar:
+                    SendReqActivate();
+                    break;
+
                 case ConsoleKey.R:
                     if (key.Modifiers == ConsoleModifiers.Control)
                     {
@@ -719,19 +763,29 @@ namespace Meridian59.TuiClient
             ushort origY     = avatar.CoordinateY;
             ushort origAngle = avatar.AngleUnits;
 
-            // Desired position
-            ushort newX = (ushort)Math.Clamp((int)origX + dx * 64, 0, 65535);
-            ushort newY = (ushort)Math.Clamp((int)origY + dy * 64, 0, 65535);
+            // Use smaller steps (16 instead of 64) for finer movement
+            // 16 units = 1 "fine" unit in Meridian
+            ushort newX = (ushort)Math.Clamp((int)origX + dx * 16, 0, 65535);
+            ushort newY = (ushort)Math.Clamp((int)origY + dy * 16, 0, 65535);
 
             // Temporarily set desired coords so SendReqMoveMessage can read them, then restore.
-            // The server will confirm or rubberband via BP_Move → StartMoveTo.
+            // The server will confirm or rubberband via BP_Move.
+            // Using base.SendReqMoveMessage(true) also handles PI 223 SectorMove updates.
             avatar.CoordinateX = newX;
             avatar.CoordinateY = newY;
             avatar.AngleUnits  = angle;
+            
+            // Set speed to something non-zero so base.SendReqMoveMessage doesn't abort
+            byte origSpeed = (byte)avatar.HorizontalSpeed;
+            avatar.HorizontalSpeed = 16; 
+
             SendReqMoveMessage(true);
+
+            // Restore
             avatar.CoordinateX = origX;
             avatar.CoordinateY = origY;
             avatar.AngleUnits  = origAngle;
+            avatar.HorizontalSpeed = origSpeed;
 
             if (isRecording)
                 recorder.Record("Move", avatar, $"X:{newX},Y:{newY},A:{angle}");
@@ -740,6 +794,43 @@ namespace Meridian59.TuiClient
         public override void SendReqMoveMessage(bool ForceSend)
         {
             base.SendReqMoveMessage(ForceSend);
+        }
+
+        public override void SendReqActivate()
+        {
+            var avatar = Data.AvatarObject;
+            if (avatar == null) return;
+
+            // Find the nearest interactive object within a reasonable distance
+            Meridian59.Data.Models.RoomObject nearest = null;
+            double minDist = 128.0; // max distance to activate (standard is ~64-128)
+
+            foreach (var obj in Data.RoomObjects)
+            {
+                if (obj.ID == avatar.ID) continue;
+                
+                // Calculate 2D distance
+                double dx = obj.CoordinateX - avatar.CoordinateX;
+                double dy = obj.CoordinateY - avatar.CoordinateY;
+                double dist = Math.Sqrt(dx * dx + dy * dy);
+
+                if (dist < minDist)
+                {
+                    minDist = dist;
+                    nearest = obj;
+                }
+            }
+
+            if (nearest != null)
+            {
+                Log("SYS", $"Activating: {nearest.Name} (ID: {nearest.ID})");
+                base.SendReqActivate(nearest.ID);
+            }
+            else
+            {
+                // If no object, just call base which might use Highlighted if set by some other means
+                base.SendReqActivate();
+            }
         }
 
         public override void SendActionMessage(ActionType Action)
