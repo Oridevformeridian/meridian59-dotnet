@@ -640,8 +640,19 @@ namespace Meridian59.Files
             // load strings of the rsbfile to use
             // into the multithreaded dictionary
             if (file != null)
+            {
+                Logger.Log(MODULENAME, LogType.Info, "DEBUG: Loaded string dictionary " + RsbFile + " (v" + file.Version + ") with " + file.StringResources.Count + " strings.");
                 foreach (RsbResourceID res in file.StringResources)
+                {
+                    if (res.ID == 20055)
+                        Logger.Log(MODULENAME, LogType.Info, "DEBUG: Found resource 20055: " + res.Text);
                     StringResources.TryAdd(res.ID, res.Text, res.Language);
+                }
+            }
+            else
+            {
+                Logger.Log(MODULENAME, LogType.Info, "DEBUG: FAILED to load string dictionary: " + RsbFile);
+            }
 
             // raise event
             if (StringDictionarySelected != null)

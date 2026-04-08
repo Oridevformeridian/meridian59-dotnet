@@ -66,6 +66,6 @@ namespace Meridian59.Protocol.GameMessages
         }
 
         public ReqArticlesMessage(byte[] Buffer, int StartIndex = 0) 
-            : base (Buffer, StartIndex = 0) { }       
+            : base (Buffer, StartIndex) { }       
     }
 }

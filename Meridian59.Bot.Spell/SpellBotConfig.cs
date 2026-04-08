@@ -48,11 +48,16 @@ namespace Meridian59.Bot.Spell
         public const string XMLVALUE_STAND      = "stand";
         public const string XMLVALUE_SLEEP      = "sleep";
         public const string XMLVALUE_SAY        = "say";
+        public const string XMLVALUE_MOVE       = "move";
         public const string XMLVALUE_ROOM       = "room";
         public const string XMLVALUE_INVENTORY  = "inventory";
         public const string XMLVALUE_QUIT       = "quit";
         public const string XMLVALUE_SKIP       = "skip";
         public const string XMLVALUE_SELF       = "self";
+
+        public const string XMLATTRIB_X         = "x";
+        public const string XMLATTRIB_Y         = "y";
+        public const string XMLATTRIB_SPEED     = "speed";
 
         public const string DEFAULTVAL_SPELLBOT_TEMPLATE = "";
         public const string DEFAULTVAL_SPELLBOT_TEMPLATENAME = "";
@@ -232,6 +237,17 @@ namespace Meridian59.Bot.Spell
 
                         if (text != null)
                             template.Tasks.Add(new BotTaskSay(text));
+                        break;
+
+                    case XMLVALUE_MOVE:
+                        ushort move_x = (child.Attributes[XMLATTRIB_X] != null) ?
+                            ushort.Parse(child.Attributes[XMLATTRIB_X].Value) : (ushort)0;
+                        ushort move_y = (child.Attributes[XMLATTRIB_Y] != null) ?
+                            ushort.Parse(child.Attributes[XMLATTRIB_Y].Value) : (ushort)0;
+                        byte move_speed = (child.Attributes[XMLATTRIB_SPEED] != null) ?
+                            byte.Parse(child.Attributes[XMLATTRIB_SPEED].Value) : (byte)128;
+
+                        template.Tasks.Add(new BotTaskMove(move_x, move_y, move_speed));
                         break;
 
                 }

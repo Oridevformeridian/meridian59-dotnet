@@ -1,4 +1,4 @@
-﻿/*
+/*
  Copyright (c) 2012-2013 Clint Banzhaf
  This file is part of "Meridian59 .NET".
 
@@ -60,32 +60,59 @@ namespace Meridian59.Protocol
         public LockingQueue<GameMessage> OutputQueue { get; protected set; }
         #endregion
 
-        #region Constructor
+        #region Events
+        public event Action<string, string> OnLog;
+
+        protected void Log(string Type, string Text)
+        {
+            if (OnLog != null) OnLog(Type, Text);
+        }
+        #endregion
+
+        #region Constructors
+        /// <summary>
+        /// Constructor
+        /// </summary>
+        public MessageEnrichment()
+        {
+            // init output queue
+            OutputQueue = new LockingQueue<GameMessage>();
+        }
+
         /// <summary>
         /// Constructor
         /// </summary>
         /// <param name="M59ResourceManager">Will be used to resolve/load resources</param>
         /// <param name="ServerConnection">Reads incoming messages from this ServerConnection</param>
-        public MessageEnrichment(ResourceManager M59ResourceManager, ServerConnection ServerConnection)
+        public MessageEnrichment(ResourceManager M59ResourceManager, ServerConnection ServerConnection) : this()
         {
-            // init output queue
-            OutputQueue = new LockingQueue<GameMessage>();
+            Init(M59ResourceManager, ServerConnection);
+        }
 
+        public void Init(ResourceManager M59ResourceManager, ServerConnection ServerConnection)
+        {
             // save references
             resourceManager = M59ResourceManager;
             serverConnection = ServerConnection;
-            
-            // mark running
+        }
+        #endregion
+
+        #region Methods
+        /// <summary>
+        /// Starts the enrichment thread.
+        /// </summary>
+        public void Start()
+        {
+            if (IsRunning)
+                return;
+
             IsRunning = true;
-            
+
             // start own workthread
             workThread = new Thread(ThreadProc);
             workThread.IsBackground = true;
             workThread.Start();
         }
-        #endregion
-
-        #region Methods
         /// <summary>
         /// Internal thread procedure
         /// </summary>
@@ -99,12 +126,19 @@ namespace Meridian59.Protocol
                 // Process queues:
                 // Enriche incoming messages from serverconnection and puts them into output queue
                 // Handle all pending incoming messages
-                while (serverConnection.ReceiveQueue.TryDequeue(out Message))
+                while (serverConnection != null && serverConnection.ReceiveQueue.TryDequeue(out Message))
                 {
-                    // start enrichtment
-                    HandleGameMessage(Message);
+                    try
+                    {
+                        // start enrichtment
+                        HandleGameMessage(Message);
+                    }
+                    catch (Exception ex)
+                    {
+                        Log("ERROR", "Background CRASH in MessageEnrichment: " + ex.Message);
+                    }
 
-                    // finally enqueue it to output
+                    // finally enqueue it to output so the client thread can see it
                     OutputQueue.Enqueue(Message);
                 }
 
@@ -132,7 +166,7 @@ namespace Meridian59.Protocol
                 HandleLoginModeMessage((LoginModeMessage)Message);
             }
             else if (Message is GameModeMessage)
-            {              
+            {
                 HandleGameModeMessage((GameModeMessage)Message);
             }
 
@@ -142,27 +176,42 @@ namespace Meridian59.Protocol
                 //             
             }
         }
-
         /// <summary>
         /// Will be executed for any new LoginMode message from the server
         /// </summary>
         /// <param name="Message"></param>
         protected virtual void HandleLoginModeMessage(LoginModeMessage Message)
         {
-            /*switch ((MessageTypeLoginMode)Message.PI)
+            switch ((MessageTypeLoginMode)Message.PI)
             {
-                
-            }*/
+                case MessageTypeLoginMode.Game:                                 // 25
+                    HandleGameStateMessage((GameStateMessage)Message);
+                    break;
+            }
+        }
+
+        protected virtual void HandleGameStateMessage(GameStateMessage Message)
+        {
         }
 
         /// <summary>
         /// Will be executed for any new GameMode message from the server
         /// </summary>
         /// <param name="Message"></param>
-        protected virtual void HandleGameModeMessage(GameModeMessage Message)
+        public virtual void HandleGameModeMessage(GameModeMessage Message)
         {
             switch ((MessageTypeGameMode)Message.PI)
             {
+                case MessageTypeGameMode.CharInfoOk:                            // 56
+                case MessageTypeGameMode.LoadModule:                            // 58
+                case MessageTypeGameMode.Said:                                  // 206
+                    // no enrichment needed
+                    break;
+
+                case MessageTypeGameMode.Characters:                            // 139
+                    HandleCharactersMessage((CharactersMessage)Message);
+                    break;
+
                 case MessageTypeGameMode.Player:                                // 130
                     HandlePlayerMessage((PlayerMessage)Message);
                     break;
@@ -335,16 +384,23 @@ namespace Meridian59.Protocol
 
         protected virtual void HandleRoomContentsMessage(RoomContentsMessage Message)
         {
-            double tick = GameTick.GetUpdatedTick();
-
-            foreach (RoomObject obj in Message.RoomObjects)
+            try
             {
-                obj.ResolveResources(resourceManager, false);
-                obj.DecompressResources();
-            }
+                double tick = GameTick.GetUpdatedTick();
 
-            double span = GameTick.GetUpdatedTick() - tick;
-            Logger.Log(MODULENAME, LogType.Info, "Loaded BP_ROOM_CONTENTS: " + span.ToString() + " ms");
+                foreach (RoomObject obj in Message.RoomObjects)
+                {
+                    obj.ResolveResources(resourceManager, false);
+                    obj.DecompressResources();
+                }
+
+                double span = GameTick.GetUpdatedTick() - tick;
+                Log("DEBUG", "Loaded BP_ROOM_CONTENTS: " + span.ToString() + " ms");
+            }
+            catch (Exception ex)
+            {
+                Log("ERROR", "CRASH in HandleRoomContentsMessage: " + ex.Message);
+            }
         }
 
         protected virtual void HandleObjectContentsMessage(ObjectContentsMessage Message)
@@ -360,6 +416,10 @@ namespace Meridian59.Protocol
         {
             Message.CharCreationInfo.ResolveResources(resourceManager, false);
             Message.CharCreationInfo.DecompressResources();
+        }
+
+        protected virtual void HandleCharactersMessage(CharactersMessage Message)
+        {
         }
 
         protected virtual void HandleSpellsMessage(SpellsMessage Message)

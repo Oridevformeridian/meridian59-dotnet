@@ -124,7 +124,7 @@ namespace Meridian59.Protocol.GameMessages
         }
 
         public StatGroupMessage(byte[] Buffer, int StartIndex = 0) 
-            : base (Buffer, StartIndex = 0) { }
+            : base (Buffer, StartIndex) { }
 
         public unsafe StatGroupMessage(ref byte* Buffer)
             : base(ref Buffer) { }

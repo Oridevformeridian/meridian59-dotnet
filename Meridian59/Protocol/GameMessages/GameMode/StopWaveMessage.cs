@@ -77,7 +77,7 @@ namespace Meridian59.Protocol.GameMessages
 		}
 
 		public StopWaveMessage(byte[] Buffer, int StartIndex = 0) 
-			: base (Buffer, StartIndex = 0) { }
+			: base (Buffer, StartIndex) { }
 
 		public unsafe StopWaveMessage(ref byte* Buffer)
 			: base(ref Buffer) { }

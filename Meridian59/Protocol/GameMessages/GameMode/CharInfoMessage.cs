@@ -71,7 +71,7 @@ namespace Meridian59.Protocol.GameMessages
         }
 
         public CharInfoMessage(byte[] Buffer, int StartIndex = 0) 
-            : base (Buffer, StartIndex = 0) { }
+            : base (Buffer, StartIndex) { }
 
         #endregion
     }

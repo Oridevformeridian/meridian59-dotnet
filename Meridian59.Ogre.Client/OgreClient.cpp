@@ -111,7 +111,6 @@ namespace Meridian59 { namespace Ogre
       /*                                 CREATE SCENEMANAGER + CAMERA,                                        */
       /********************************************************************************************************/
 
-      Logger::Log(MODULENAME, LogType::Info, "init scenemanager");
       // init scenemanager
       sceneManager = (OctreeSceneManager*)root->createSceneManager(SceneType::ST_GENERIC);
       sceneManager->setCameraRelativeRendering(true);
@@ -128,41 +127,21 @@ namespace Meridian59 { namespace Ogre
       camera->setPosition(::Ogre::Vector3(0, 0, 0));
       camera->setNearClipDistance(1.0f);
       camera->setUseRenderingDistance(false);
-      if(sceneManager->hasSceneNode(AVATARCAMNODE))
-      {
-	      cameraNode = sceneManager->getSceneNode(AVATARCAMNODE);
-      }
-      else
-      {
+
       // create camera node (this is placed at the avatar roughly at eye height)
       cameraNode = sceneManager->createSceneNode(AVATARCAMNODE);
-      }   
       cameraNode->setPosition(::Ogre::Vector3(0, 0, 0));
       cameraNode->setFixedYawAxis(true);
       cameraNode->setInitialState();
 
       // create camera node in orbit (this is where the actual camera is, with z offset)
-      if (sceneManager->hasSceneNode(AVATARCAMNODEORBIT))
-      {
-	    cameraNodeOrbit = sceneManager->getSceneNode(AVATARCAMNODEORBIT);   
-      }
-       else
-      {
       cameraNodeOrbit = cameraNode->createChildSceneNode(AVATARCAMNODEORBIT);
       cameraNodeOrbit->setPosition(::Ogre::Vector3(0, 0, 0));
       cameraNodeOrbit->setFixedYawAxis(true);
       cameraNodeOrbit->setInitialState();
 
       // attach camera
-      if (!camera->isAttached()){
-        cameraNodeOrbit->attachObject(camera);
-      } else {
-	 Logger::Log(MODULENAME, LogType::Error, "Camera Already Attached ");
-         cameraNodeOrbit->detachObject(camera);
-         cameraNodeOrbit->attachObject(camera);
-      }
-      }
-
+      cameraNodeOrbit->attachObject(camera);
 
       /********************************************************************************************************/
       /*                                       INVIS EFFECT RTT                                               */
@@ -1069,19 +1048,6 @@ namespace Meridian59 { namespace Ogre
          foundset[45]->Label = StringConvert::OgreToCLR(keyboard->getAsString(keybinding->ActionButton46));
          foundset[46]->Label = StringConvert::OgreToCLR(keyboard->getAsString(keybinding->ActionButton47));
          foundset[47]->Label = StringConvert::OgreToCLR(keyboard->getAsString(keybinding->ActionButton48));
-
-		 foundset[48]->Label = StringConvert::OgreToCLR(keyboard->getAsString(keybinding->ActionButton49));
-		 foundset[49]->Label = StringConvert::OgreToCLR(keyboard->getAsString(keybinding->ActionButton50));
-		 foundset[50]->Label = StringConvert::OgreToCLR(keyboard->getAsString(keybinding->ActionButton51));
-		 foundset[51]->Label = StringConvert::OgreToCLR(keyboard->getAsString(keybinding->ActionButton52));
-		 foundset[52]->Label = StringConvert::OgreToCLR(keyboard->getAsString(keybinding->ActionButton53));
-		 foundset[53]->Label = StringConvert::OgreToCLR(keyboard->getAsString(keybinding->ActionButton54));
-		 foundset[54]->Label = StringConvert::OgreToCLR(keyboard->getAsString(keybinding->ActionButton55));
-		 foundset[55]->Label = StringConvert::OgreToCLR(keyboard->getAsString(keybinding->ActionButton56));
-		 foundset[56]->Label = StringConvert::OgreToCLR(keyboard->getAsString(keybinding->ActionButton57));
-		 foundset[57]->Label = StringConvert::OgreToCLR(keyboard->getAsString(keybinding->ActionButton58));
-		 foundset[58]->Label = StringConvert::OgreToCLR(keyboard->getAsString(keybinding->ActionButton59));
-		 foundset[59]->Label = StringConvert::OgreToCLR(keyboard->getAsString(keybinding->ActionButton60));
       }
    };
 

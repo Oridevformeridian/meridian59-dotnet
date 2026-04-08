@@ -129,7 +129,7 @@ namespace Meridian59.Data.Models
             this.hotSpot = Buffer[cursor];
             cursor++;
 
-            if ((AnimationType)Buffer[cursor] == AnimationType.TRANSLATION)           // check if the next byte is animationtype                           
+            if ((AnimationType)Buffer[cursor] == AnimationType.TRANSLATION)           // check if the next byte is animationtype
             {                                                                           // TRANSLATION or EFFECT
                 firstAnimationType = (AnimationType)Buffer[cursor];
                 cursor++;
@@ -190,7 +190,7 @@ namespace Meridian59.Data.Models
             hotSpot = Buffer[0];
             Buffer++;
 
-            if ((AnimationType)Buffer[0] == AnimationType.TRANSLATION)        // check if the next byte is animationtype                           
+            if ((AnimationType)Buffer[0] == AnimationType.TRANSLATION)        // check if the next byte is animationtype
             {
                 firstAnimationType = (AnimationType)Buffer[0];
                 Buffer++;

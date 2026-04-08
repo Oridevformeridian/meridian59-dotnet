@@ -402,7 +402,11 @@ namespace Meridian59.Drawing2D
                 int height = (int)MathUtil.NextPowerOf2((uint)Math.Ceiling(textSize.Height));
 
                 // get color to use for quest marker based on objectflags
+#if !VANILLA
                 Color color = Color.FromArgb((int)QuestMarkerColors.GetColorFor(Object.Flags));
+#else
+                Color color = Color.White;
+#endif
 
                 // create bitmap to draw on
                 Bitmap bitmap = new Bitmap(width, height, PixelFormat.Format32bppArgb);

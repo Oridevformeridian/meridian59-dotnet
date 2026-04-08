@@ -5,7 +5,7 @@
     <Copyright>IRC.NET is copyright © 2011-2016 Alex Regueiro, Christian Stewart</Copyright>
     <VersionPrefix>0.6.0</VersionPrefix>
     <Authors>Alexander Regueiro;Christian Stewart</Authors>
-    <TargetFrameworks>net40;net45;net451;net461</TargetFrameworks>
+    <TargetFrameworks>net40;net45;net451;net461;net8.0</TargetFrameworks>
     <AssemblyName>IrcDotNet</AssemblyName>
     <PackageId>IrcDotNet</PackageId>
     <PackageTags>communication;irc;networking;ctcp</PackageTags>

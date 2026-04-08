@@ -26,7 +26,7 @@ namespace Meridian59.Protocol.GameMessages
             : base(MessageTypeGameMode.SendPlayer) { }
 
         public SendPlayerMessage(byte[] Buffer, int StartIndex = 0)
-            : base(Buffer, StartIndex = 0) { }
+            : base(Buffer, StartIndex) { }
 
         public unsafe SendPlayerMessage(ref byte* Buffer)
             : base(ref Buffer) { }

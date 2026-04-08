@@ -14,6 +14,8 @@
  If not, see http://www.gnu.org/licenses/.
 */
 
+#if !VANILLA && !OPENMERIDIAN
+
 using System;
 using Meridian59.Common.Constants;
 using Meridian59.Protocol.Enums;
@@ -90,6 +92,7 @@ namespace Meridian59.Protocol.GameMessages
         }
 
         public ReqPerformMessage(byte[] Buffer, int StartIndex = 0) 
-            : base (Buffer, StartIndex = 0) { }        
+            : base (Buffer, StartIndex) { }        
     }
 }
+#endif

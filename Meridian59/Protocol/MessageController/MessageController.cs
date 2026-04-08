@@ -1,4 +1,4 @@
-﻿/*
+/*
  Copyright (c) 2012-2013 Clint Banzhaf
  This file is part of "Meridian59 .NET".
 
@@ -72,6 +72,13 @@ namespace Meridian59.Protocol
         /// Raised when the protocol mode changes
         /// </summary>
         public event EventHandler ProtocolModeChanged;
+
+        public event Action<string, string> OnLog;
+
+        protected void Log(string Type, string Text)
+        {
+            if (OnLog != null) OnLog(Type, Text);
+        }
         #endregion
 
         #region Fields
@@ -101,6 +108,11 @@ namespace Meridian59.Protocol
         /// Instance of a PI decoder used to decode PacketIdentifiers
         /// </summary>
         public PIDecoder PIDecoder { get; protected set; }
+
+        /// <summary>
+        /// Instance of a PI encoder used to encode outgoing PacketIdentifiers
+        /// </summary>
+        public PIEncoder PIEncoder { get; protected set; }
 
         /// <summary>
         /// Instance of a CRCreator used to encrypt outgoing Packet-CRCs
@@ -155,6 +167,7 @@ namespace Meridian59.Protocol
             CurrentServerSave = 0x00;
             LastServerSave = 0x00;
             PIDecoder = new PIDecoder(stringResources);
+            PIEncoder = new PIEncoder(stringResources);
             CRCCreator = new CRCCreator();
             CRCCreatorEnabled = false;            
             Mode = ProtocolMode.Login;
@@ -226,6 +239,8 @@ namespace Meridian59.Protocol
                 e.MessageBuffer[MessageHeader.Tcp.HEADERLENGTH] :
                 e.MessageBuffer[MessageHeader.Udp.HEADERLENGTH];
 
+            Log("DEBUG", $"ExtractMessage: PI={(int)PI} Mode={Mode}");
+
             // parse packet based on current protocol mode
             switch (Mode)
             {
@@ -255,6 +270,8 @@ namespace Meridian59.Protocol
         protected unsafe GameMessage ExtractLoginModeMessage(MessageBufferEventArgs e, MessageTypeLoginMode PI)
         {
             GameMessage TypedMessage = null;
+
+            Log("DEBUG", $"Extracting LP_{PI} ({(int)PI}) - Length: {e.Length}");
            
             // pin the byte[] for pointer parsers
             fixed (byte* pBuffer = e.MessageBuffer)
@@ -315,7 +332,7 @@ namespace Meridian59.Protocol
                         break;
 
                     case MessageTypeLoginMode.Download:               // PI: 31
-                        TypedMessage = new DownloadMessage(ref pMessage);
+                        TypedMessage = new DownloadMessage(e.MessageBuffer);
                         break;
                         
                     case MessageTypeLoginMode.Message:                // PI: 34
@@ -345,13 +362,17 @@ namespace Meridian59.Protocol
         {
             GameMessage TypedMessage = null;
 
-            // pin the byte[] for pointer parsers
-            fixed (byte* pBuffer = e.MessageBuffer)
+            Log("DEBUG", $"Extracting BP_{PI} ({(int)PI}) - Length: {e.Length}");
+
+            try
             {
-                byte* pMessage = pBuffer;
-                
-                switch (PI)
+                // pin the byte[] for pointer parsers
+                fixed (byte* pBuffer = e.MessageBuffer)
                 {
+                    byte* pMessage = pBuffer;
+
+                    switch (PI)
+                    {
                     case MessageTypeGameMode.EchoPing:                                        // PI: 1
                         TypedMessage = new EchoPingMessage(e.MessageBuffer);
                         HandleEchoPing((EchoPingMessage)TypedMessage);
@@ -373,11 +394,11 @@ namespace Meridian59.Protocol
                         break;
 #endif
                     case MessageTypeGameMode.Wait:                                            // PI: 21
-                        TypedMessage = new WaitMessage(ref pMessage);
+                        TypedMessage = new WaitMessage(e.MessageBuffer);
                         break;
 
                     case MessageTypeGameMode.Unwait:                                          // PI: 22
-                        TypedMessage = new UnwaitMessage(ref pMessage);
+                        TypedMessage = new UnwaitMessage(e.MessageBuffer);
                         break;
 
                     case MessageTypeGameMode.ChangePassword:                                  // PI: 23
@@ -385,7 +406,7 @@ namespace Meridian59.Protocol
                         break;
 
                     case MessageTypeGameMode.ChangeResource:                                  // PI: 30
-                        TypedMessage = new ChangeResourceMessage(ref pMessage);
+                        TypedMessage = new ChangeResourceMessage(e.MessageBuffer);
                         HandleChangeResource((ChangeResourceMessage)TypedMessage);
                         break;
 
@@ -398,7 +419,7 @@ namespace Meridian59.Protocol
                         break;
 
                     case MessageTypeGameMode.SendPlayer:                                      // PI: 40
-                        TypedMessage = new SendPlayerMessage(ref pMessage);
+                        TypedMessage = new SendPlayerMessage(e.MessageBuffer);
 
                         break;
                     case MessageTypeGameMode.SendStats:                                       // PI: 41
@@ -406,15 +427,15 @@ namespace Meridian59.Protocol
                         break;
 
                     case MessageTypeGameMode.SendRoomContents:                                // PI: 42
-                        TypedMessage = new SendRoomContentsMessage(ref pMessage);
+                        TypedMessage = new SendRoomContentsMessage(e.MessageBuffer);
                         break;
 
                     case MessageTypeGameMode.SendObjectContents:                              // PI: 43
-                        TypedMessage = new SendObjectContentsMessage(ref pMessage);
+                        TypedMessage = new SendObjectContentsMessage(e.MessageBuffer);
                         break;
 
                     case MessageTypeGameMode.SendPlayers:                                     // PI: 44
-                        TypedMessage = new SendPlayersMessage(ref pMessage);
+                        TypedMessage = new SendPlayersMessage(e.MessageBuffer);
                         break;
 
                     case MessageTypeGameMode.SendCharacters:                                  // PI: 45           
@@ -624,51 +645,51 @@ namespace Meridian59.Protocol
                         break;
 #if !OPENMERIDIAN
                     case MessageTypeGameMode.RoomContentsFlags:                               // PI: 128
-                        TypedMessage = new RoomContentsFlagsMessage(ref pMessage);
+                        TypedMessage = new RoomContentsFlagsMessage(e.MessageBuffer);
                         break;
 
                     case MessageTypeGameMode.ChangeObjectFlags:                               // PI: 129
-                        TypedMessage = new ChangeObjectFlagsMessage(ref pMessage);
+                        TypedMessage = new ChangeObjectFlagsMessage(e.MessageBuffer);
                         break;
 #endif
 #endif
                     case MessageTypeGameMode.Player:                                          // PI: 130
-                        TypedMessage = new PlayerMessage(ref pMessage);
+                        TypedMessage = new PlayerMessage(e.MessageBuffer);
                         HandlePlayer((PlayerMessage)TypedMessage);
                         break;
 
                     case MessageTypeGameMode.Stat:                                            // PI: 131
-                        TypedMessage = new StatMessage(ref pMessage);
+                        TypedMessage = new StatMessage(e.MessageBuffer);
                         HandleStat((StatMessage)TypedMessage);
                         break;
 
                     case MessageTypeGameMode.StatGroup:                                       // PI: 132
-                        TypedMessage = new StatGroupMessage(ref pMessage);
+                        TypedMessage = new StatGroupMessage(e.MessageBuffer);
                         HandleStatGroup((StatGroupMessage)TypedMessage);
                         break;
 
                     case MessageTypeGameMode.StatGroups:                                      // PI: 133
-                        TypedMessage = new StatGroupsMessage(ref pMessage);
+                        TypedMessage = new StatGroupsMessage(e.MessageBuffer);
                         HandleStatGroups((StatGroupsMessage)TypedMessage);
                         break;
 
                     case MessageTypeGameMode.RoomContents:                                    // PI: 134
-                        TypedMessage = new RoomContentsMessage(ref pMessage);
+                        TypedMessage = new RoomContentsMessage(e.MessageBuffer);
                         HandleRoomContents((RoomContentsMessage)TypedMessage);
                         break;
 
                     case MessageTypeGameMode.ObjectContents:                                  // PI: 135
-                        TypedMessage = new ObjectContentsMessage(ref pMessage);
+                        TypedMessage = new ObjectContentsMessage(e.MessageBuffer);
                         HandleObjectContents((ObjectContentsMessage)TypedMessage);
                         break;
 
                     case MessageTypeGameMode.Players:                                         // PI: 136
-                        TypedMessage = new PlayersMessage(ref pMessage);
+                        TypedMessage = new PlayersMessage(e.MessageBuffer);
                         HandlePlayers((PlayersMessage)TypedMessage);
                         break;
 
                     case MessageTypeGameMode.PlayerAdd:                                       // PI: 137
-                        TypedMessage = new PlayerAddMessage(ref pMessage);
+                        TypedMessage = new PlayerAddMessage(e.MessageBuffer);
                         HandlePlayerAdd((PlayerAddMessage)TypedMessage);
                         break;
 
@@ -687,12 +708,12 @@ namespace Meridian59.Protocol
                         break;
 
                     case MessageTypeGameMode.Spells:                                          // PI: 141
-                        TypedMessage = new SpellsMessage(ref pMessage);
+                        TypedMessage = new SpellsMessage(e.MessageBuffer);
                         HandleSpells((SpellsMessage)TypedMessage);
                         break;
 
                     case MessageTypeGameMode.SpellAdd:                                        // PI: 142
-                        TypedMessage = new SpellAddMessage(ref pMessage);
+                        TypedMessage = new SpellAddMessage(e.MessageBuffer);
                         HandleSpellAdd((SpellAddMessage)TypedMessage);
                         break;
 
@@ -701,7 +722,7 @@ namespace Meridian59.Protocol
                         break;
 
                     case MessageTypeGameMode.Skills:                                          // PI: 144
-                        TypedMessage = new SkillsMessage(ref pMessage);
+                        TypedMessage = new SkillsMessage(e.MessageBuffer);
                         HandleSkills((SkillsMessage)TypedMessage);
                         break;
 
@@ -739,12 +760,12 @@ namespace Meridian59.Protocol
                         break;
 
                     case MessageTypeGameMode.AddBgOverlay:                                    // PI: 152
-                        TypedMessage = new AddBgOverlayMessage(ref pMessage);
+                        TypedMessage = new AddBgOverlayMessage(e.MessageBuffer);
                         HandleAddBgOverlay((AddBgOverlayMessage)TypedMessage);
                         break;
 
                     case MessageTypeGameMode.ChangeBgOverlay:                                 // PI: 154
-                        TypedMessage = new ChangeBgOverlayMessage(ref pMessage);
+                        TypedMessage = new ChangeBgOverlayMessage(e.MessageBuffer);
                         HandleChangeBgOverlay((ChangeBgOverlayMessage)TypedMessage);
                         break;
 
@@ -774,7 +795,7 @@ namespace Meridian59.Protocol
                         break;
 
                     case MessageTypeGameMode.PlayWave:                                        // PI: 170
-                        TypedMessage = new PlayWaveMessage(ref pMessage);
+                        TypedMessage = new PlayWaveMessage(e.MessageBuffer);
                         HandlePlayWave((PlayWaveMessage)TypedMessage);
                         break;
 
@@ -799,7 +820,7 @@ namespace Meridian59.Protocol
                         break;
 
                     case MessageTypeGameMode.Articles:                                        // PI: 181
-                        TypedMessage = new ArticlesMessage(ref pMessage);
+                        TypedMessage = new ArticlesMessage(e.MessageBuffer);
                         break;
 
                     case MessageTypeGameMode.Article:                                         // PI: 182
@@ -860,7 +881,7 @@ namespace Meridian59.Protocol
                         break;
 
                     case MessageTypeGameMode.Inventory:                                       // PI: 208
-                        TypedMessage = new InventoryMessage(ref pMessage);
+                        TypedMessage = new InventoryMessage(e.MessageBuffer);
                         HandleInventory((InventoryMessage)TypedMessage);
                         break;
 
@@ -903,7 +924,7 @@ namespace Meridian59.Protocol
                         break;
 
                     case MessageTypeGameMode.Create:                                          // PI: 217
-                        TypedMessage = new CreateMessage(ref pMessage);
+                        TypedMessage = new CreateMessage(e.MessageBuffer);
                         HandleCreate((CreateMessage)TypedMessage);
                         break;
 
@@ -912,7 +933,7 @@ namespace Meridian59.Protocol
                         break;
 
                     case MessageTypeGameMode.Change:                                          // PI: 219
-                        TypedMessage = new ChangeMessage(ref pMessage);
+                        TypedMessage = new ChangeMessage(e.MessageBuffer);
                         HandleChange((ChangeMessage)TypedMessage);
                         break;
 
@@ -937,7 +958,7 @@ namespace Meridian59.Protocol
                         break;
 
                     case MessageTypeGameMode.WallAnimate:                                     // PI: 225
-                        TypedMessage = new WallAnimateMessage(ref pMessage);
+                        TypedMessage = new WallAnimateMessage(e.MessageBuffer);
                         break;
 
                     case MessageTypeGameMode.ChangeTexture:                                   // PI: 227
@@ -945,7 +966,7 @@ namespace Meridian59.Protocol
                         break;
 
                     case MessageTypeGameMode.InvalidateData:                                  // PI: 228
-                        TypedMessage = new InvalidateDataMessage(ref pMessage);
+                        TypedMessage = new InvalidateDataMessage(e.MessageBuffer);
                         break;
 
                     case MessageTypeGameMode.ReqDeposit:                                      // PI: 230
@@ -971,7 +992,14 @@ namespace Meridian59.Protocol
                     default:
                         TypedMessage = new GenericGameMessage(e.MessageBuffer);              // All unknown ones
                         break;
+                    }
                 }
+            }
+            catch (Exception ex)
+            {
+                Log("ERROR", $"Exception extracting BP_{PI} ({(int)PI}): {ex.Message}");
+                Log("ERROR", ex.StackTrace ?? "no stack trace");
+                TypedMessage = new GenericGameMessage(e.MessageBuffer);
             }
 
             return TypedMessage;

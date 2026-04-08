@@ -75,6 +75,6 @@ namespace Meridian59.Protocol.GameMessages
         }
 
         public RemoveEnchantmentMessage(byte[] Buffer, int StartIndex = 0) 
-            : base (Buffer, StartIndex = 0) { }       
+            : base (Buffer, StartIndex) { }       
     }
 }

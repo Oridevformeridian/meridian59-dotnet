@@ -40,6 +40,11 @@ namespace Meridian59.Bot.Spell
         protected BotTask currentTask;
         protected uint imps = 0;
 
+        // load test timing
+        private double castStartTick = 0;
+        private double moveStartTick = 0;
+        private bool wasMoving = false;
+
         /// <summary>
         /// Constructor
         /// </summary>
@@ -142,6 +147,13 @@ namespace Meridian59.Bot.Spell
         {
             base.HandleMessageMessage(Message);
 
+            // complete cast round-trip measurement
+            if (castStartTick > 0)
+            {
+                Metrics.Record("cast_rtt_ms", GameTick.Current - castStartTick);
+                castStartTick = 0;
+            }
+
             if (Message.Message.FullString.Contains(ChatSubStrings.IMPROVED))
                 imps++;
 
@@ -155,7 +167,7 @@ namespace Meridian59.Bot.Spell
         /// <param name="Words"></param>
         protected override void ProcessCommand(uint PartnerID, string[] Words)
         {
-            
+            base.ProcessCommand(PartnerID, Words);
         }
 
         /// <summary>
@@ -164,13 +176,26 @@ namespace Meridian59.Bot.Spell
         public override void Update()
         {
             base.Update();
-           
+
+            // detect movement completion and record elapsed time
+            if (Data.AvatarObject != null)
+            {
+                bool isMoving = Data.AvatarObject.IsMoving;
+                if (wasMoving && !isMoving && moveStartTick > 0)
+                {
+                    Metrics.Record("move_ms", GameTick.Current - moveStartTick);
+                    moveStartTick = 0;
+                }
+                wasMoving = isMoving;
+            }
+
             // ...
             if (!Data.IsWaiting &&
                 ObjectID.IsValid(Data.AvatarID) &&
                 Data.SpellObjects.Count > 0 &&
                 Data.AvatarSpells.Count > 0 &&
-                GameTick.Current > tickSleepUntil)
+                GameTick.Current > tickSleepUntil &&
+                (Data.AvatarObject == null || !Data.AvatarObject.IsMoving))
             {
                 // get next task
                 currentTask = Config.GetNextTask();
@@ -206,7 +231,11 @@ namespace Meridian59.Bot.Spell
                 
                 // say
                 else if (currentTask is BotTaskSay)               
-                    DoSay((BotTaskSay)currentTask);                
+                    DoSay((BotTaskSay)currentTask);
+
+                // move
+                else if (currentTask is BotTaskMove)
+                    DoMove((BotTaskMove)currentTask);
             }
 
             double slp = (tickSleepUntil - GameTick.Current) / (double)Common.GameTick.MSINSECOND;
@@ -312,6 +341,9 @@ namespace Meridian59.Bot.Spell
                     return;
                 }
             }
+
+            // start cast round-trip timer
+            castStartTick = GameTick.Current;
 
             // spell doesn't need a target
             if (spellObject.TargetsCount == 0)
@@ -427,6 +459,31 @@ namespace Meridian59.Bot.Spell
 
             // log
             Log("BOT", "Executed task 'say': " + Task.Text);
+        }
+
+        /// <summary>
+        /// Executes a Task 'move'
+        /// </summary>
+        /// <param name="Task"></param>
+        protected void DoMove(BotTaskMove Task)
+        {
+            if (Data.AvatarObject == null)
+            {
+                Log("WARN", "Can't execute task 'move'. AvatarObject is null.");
+                return;
+            }
+
+            // create destination from values
+            V2 destination = new V2(Task.X, Task.Y);
+
+            // start move timer
+            moveStartTick = GameTick.Current;
+
+            // initiate movement
+            Data.AvatarObject.StartMoveTo(ref destination, Task.Speed);
+
+            // log
+            Log("BOT", "Executed task 'move' to " + Task.X + "/" + Task.Y + " with speed " + Task.Speed);
         }
     }
 }

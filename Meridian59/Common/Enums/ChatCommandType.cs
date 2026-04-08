@@ -23,7 +23,7 @@ namespace Meridian59.Common.Enums
     {
         Say, Emote, Yell, Broadcast, Tell, Guild, Cast, DM, Go, GoPlayer, GetPlayer,
         WithDraw, Deposit, Suicide, Rest, Stand, Quit, Balance, Appeal, Dance, Point,
-        Wave, Macro
+        Wave
 
 #if !VANILLA
         , TempSafe, Grouping, AutoLoot, AutoCombine, ReagentBag, SpellPower, Time

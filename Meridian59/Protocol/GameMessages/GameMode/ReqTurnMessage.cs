@@ -74,6 +74,6 @@ namespace Meridian59.Protocol.GameMessages
         }
 
         public ReqTurnMessage(byte[] Buffer, int StartIndex = 0, bool IsTCP = true) 
-            : base (Buffer, StartIndex = 0, IsTCP) { }
+            : base (Buffer, StartIndex, IsTCP) { }
     }
 }

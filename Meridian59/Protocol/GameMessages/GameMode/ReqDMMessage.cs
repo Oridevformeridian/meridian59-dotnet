@@ -83,6 +83,6 @@ namespace Meridian59.Protocol.GameMessages
         }
 
         public ReqDMMessage(byte[] Buffer, int StartIndex = 0) 
-            : base (Buffer, StartIndex = 0) { }        
+            : base (Buffer, StartIndex) { }        
     }
 }

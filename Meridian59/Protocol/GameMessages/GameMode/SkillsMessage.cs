@@ -106,7 +106,7 @@ namespace Meridian59.Protocol.GameMessages
         }
 
         public SkillsMessage(byte[] Buffer, int StartIndex = 0) 
-            : base (Buffer, StartIndex = 0) { }
+            : base (Buffer, StartIndex) { }
 
         public unsafe SkillsMessage(ref byte* Buffer)
             : base(ref Buffer) { } 

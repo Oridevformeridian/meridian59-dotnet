@@ -34,7 +34,7 @@ namespace Meridian59.Protocol.GameMessages
             : base((byte)MessageType) { }
 
         public LoginModeMessage(byte[] Buffer, int StartIndex = 0)
-            : base(Buffer, StartIndex = 0) { }
+            : base(Buffer, StartIndex) { }
 
         public unsafe LoginModeMessage(ref byte* Buffer)
             : base(ref Buffer) { }

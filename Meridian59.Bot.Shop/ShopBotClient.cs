@@ -407,6 +407,8 @@ namespace Meridian59.Bot.Shop
         /// <param name="Words">First element is command name</param>
         protected override void ProcessCommand(uint PartnerID, string[] Words)
         {
+            base.ProcessCommand(PartnerID, Words);
+
             switch (Words[0])
             {
                 case COMMAND_BUY:

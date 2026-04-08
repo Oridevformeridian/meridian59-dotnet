@@ -35,16 +35,19 @@ namespace Meridian59.Bot
         protected const string XMLATTRIB_MAJORVERSION       = "majorversion";
         protected const string XMLATTRIB_MINORVERSION       = "minorversion";
         protected const string XMLATTRIB_LOGFILE            = "logfile";
+        protected const string XMLATTRIB_DEBUG              = "debug";
 
         public const byte   DEFAULTVAL_CONNECTION_MAJORVERSION  = 90;
         public const byte   DEFAULTVAL_CONNECTION_MINORVERSION  = 90;
         public const string DEFAULTVAL_CONNECTION_LOGFILE       = "bot.log";
+        public const bool   DEFAULTVAL_CONNECTION_DEBUG         = false;
         #endregion
 
         #region Properties
         public byte MajorVersion { get; protected set; }
         public byte MinorVersion { get; protected set; }
         public string LogFile { get; protected set; }
+        public bool IsDebugEnabled { get; protected set; }
         public List<String> Admins { get; protected set; }
         #endregion
 
@@ -89,6 +92,7 @@ namespace Meridian59.Bot
 
             XmlNode node;
             byte val_byte;
+            bool val_bool;
 
             // connection
 
@@ -106,12 +110,16 @@ namespace Meridian59.Bot
 
                 LogFile = (node.Attributes[XMLATTRIB_LOGFILE] != null) ?
                     node.Attributes[XMLATTRIB_LOGFILE].Value : DEFAULTVAL_CONNECTION_LOGFILE;
+
+                IsDebugEnabled = (node.Attributes[XMLATTRIB_DEBUG] != null && Boolean.TryParse(node.Attributes[XMLATTRIB_DEBUG].Value, out val_bool)) ?
+                    val_bool : DEFAULTVAL_CONNECTION_DEBUG;
             }
             else
             {
                 MajorVersion = DEFAULTVAL_CONNECTION_MAJORVERSION;
                 MinorVersion = DEFAULTVAL_CONNECTION_MINORVERSION;
                 LogFile = DEFAULTVAL_CONNECTION_LOGFILE;
+                IsDebugEnabled = DEFAULTVAL_CONNECTION_DEBUG;
             }
 
             // admins list

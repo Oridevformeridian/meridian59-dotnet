@@ -14,29 +14,12 @@ namespace Meridian59 { namespace Ogre
       // create sound holder list
       sounds = new std::list<ISound*>();
 
-
       // create scenenode
       const ::Ogre::String& ostr_scenenodename = 
          PREFIX_REMOTENODE_SCENENODE + ::Ogre::StringConverter::toString(roomObject->ID);
-	   
-       if  ((sceneManager->hasSceneNode(ostr_scenenodename)))
-       {
-       Logger::Log(MODULENAME, LogType::Info, "createremotescenenode DUPLICATE? " + roomObject->ID.ToString());
-       //SceneManager->destroySceneNode(ostr_scenenodename);
-       SceneNode = SceneManager->getSceneNode(ostr_scenenodename);
-       //SceneNode = SceneManager->getRootSceneNode()->createChildSceneNode(ostr_scenenodename);
-       }
 
-       else
-       {
-       Logger::Log(MODULENAME, LogType::Info, "createremotescenenode:" + roomObject->ID.ToString());
-       SceneNode = SceneManager->getRootSceneNode()->createChildSceneNode(ostr_scenenodename);
-       
-       }
-
-       SceneNode->setFixedYawAxis(true);
-	      
-      
+      SceneNode = SceneManager->getRootSceneNode()->createChildSceneNode(ostr_scenenodename);
+      SceneNode->setFixedYawAxis(true);
 
       // initial position and orientation
       RefreshPosition();
@@ -48,21 +31,14 @@ namespace Meridian59 { namespace Ogre
 #endif
 
       // special handling for avatar (attach camera)
-      if (RoomObject->IsAvatar && !SceneManager->hasCamera(AVATARCAMNODEORBIT))
+      if (RoomObject->IsAvatar)
       {
          ::Ogre::SceneNode* cameraNode = OgreClient::Singleton->CameraNode;
 
          // attach cameranode on avatarnode
-	try {	 
-         Logger::Log(MODULENAME, LogType::Info, "attempting to attach cameraNode");
-	 SceneNode->addChild(cameraNode);
-	 }
-	catch (...)
-	 {
-         Logger::Log(MODULENAME, LogType::Info, "duplicate cameraNode?");
-         }
+         SceneNode->addChild(cameraNode);
          SceneNode->setFixedYawAxis(true);
-	 
+
          // enable camera listener and trigger update
          OgreClient::Singleton->IsCameraListenerEnabled = true;
          cameraNode->_update(true, true);
@@ -215,8 +191,7 @@ namespace Meridian59 { namespace Ogre
       {
          // maximum distance we render this light or skip it
          Light->setRenderingDistance(MAXLIGHTRENDERDISTANCE);
-         if (!Light->isAttached())
-           SceneNode->attachObject(Light);
+         SceneNode->attachObject(Light);
       }
    };
 
@@ -244,13 +219,7 @@ namespace Meridian59 { namespace Ogre
    {
       ::Ogre::String& ostr_billboard = 
          PREFIX_NAMETEXT_BILLBOARD + ::Ogre::StringConverter::toString(roomObject->ID);
-      
-      if (sceneManager->hasBillboardSet(ostr_billboard))
-      {
-	 billboardSetName=sceneManager->getBillboardSet(ostr_billboard);
-      }
-      else
-      {
+
       // create BillboardSet for name
       billboardSetName = sceneManager->createBillboardSet(ostr_billboard, 1);
       billboardSetName->setBillboardOrigin(BillboardOrigin::BBO_BOTTOM_CENTER);
@@ -264,10 +233,9 @@ namespace Meridian59 { namespace Ogre
       // create Billboard
       billboardName = billboardSetName->createBillboard(::Ogre::Vector3::ZERO);
       billboardName->setColour(ColourValue::ZERO);
-      }
+
       // attach name billboardset to object
-      if (!billboardSetName->isAttached())
-        SceneNode->attachObject(billboardSetName);
+      SceneNode->attachObject(billboardSetName);
    };
 
    void RemoteNode::UpdateName()
@@ -347,12 +315,7 @@ namespace Meridian59 { namespace Ogre
    void RemoteNode::CreateQuestMarker()
    {
       ::Ogre::String& ostr_billboard = PREFIX_QUESTMARKER_BILLBOARD + ::Ogre::StringConverter::toString(roomObject->ID);
-      if (sceneManager->hasBillboardSet(ostr_billboard))
-      {
-	 billboardSetName=sceneManager->getBillboardSet(ostr_billboard);
-      }
-	else
-      {
+
       // create BillboardSet for quest marker
       billboardSetQuestMarker = sceneManager->createBillboardSet(ostr_billboard, 1);
       billboardSetQuestMarker->setBillboardOrigin(BillboardOrigin::BBO_BOTTOM_CENTER);
@@ -366,11 +329,9 @@ namespace Meridian59 { namespace Ogre
       // create Billboard
       billboardQuestMarker = billboardSetQuestMarker->createBillboard(::Ogre::Vector3::ZERO);
       billboardQuestMarker->setColour(ColourValue::ZERO);
-      // attach quest marker billboardset to object
-      if (!billboardSetQuestMarker->isAttached())
-        SceneNode->attachObject(billboardSetQuestMarker);
-      }
 
+      // attach quest marker billboardset to object
+      SceneNode->attachObject(billboardSetQuestMarker);
    };
 
    void RemoteNode::UpdateQuestMarker()

@@ -26,10 +26,7 @@ namespace Meridian59.Common.Enums
         Red    = 'r',
         Green  = 'g',
         Blue   = 'b',
-        Purple = 'q'
-
-#if !VANILLA
-        ,
+        Purple = 'q',
         Aquamarine = 'a',
         Cyan = 'c',
         Drab = 'd',
@@ -62,6 +59,5 @@ namespace Meridian59.Common.Enums
         QuestGreen = 'G',
         QuestRed = 'R',
         MercenaryColor = 'M'
-#endif
     }
 }

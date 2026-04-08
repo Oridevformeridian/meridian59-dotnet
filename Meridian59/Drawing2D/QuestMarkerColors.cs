@@ -14,6 +14,8 @@
  If not, see http://www.gnu.org/licenses/.
 */
 
+#if !VANILLA
+
 using Meridian59.Common;
 using Meridian59.Data.Models;
 
@@ -59,3 +61,4 @@ namespace Meridian59.Drawing2D
         }
     }
 }
+#endif

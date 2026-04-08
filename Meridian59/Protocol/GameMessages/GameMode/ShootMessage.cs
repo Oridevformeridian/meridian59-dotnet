@@ -64,7 +64,7 @@ namespace Meridian59.Protocol.GameMessages
         }
 
         public ShootMessage(byte[] Buffer, int StartIndex = 0) 
-            : base (Buffer, StartIndex = 0) { }
+            : base (Buffer, StartIndex) { }
 
         public unsafe ShootMessage(ref byte* Buffer)
             : base(ref Buffer) { }  

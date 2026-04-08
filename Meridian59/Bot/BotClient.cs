@@ -15,6 +15,7 @@
 */
 
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Threading;
 using System.ComponentModel;
@@ -63,6 +64,19 @@ namespace Meridian59.Bot
         protected const string LOG_APPVERSIONERROR  = "Your major/minor versions in configuration.xml don't match this server.";
         #endregion
 
+        /// <summary>First row used for log text output. Override in subclasses for dynamic layouts.</summary>
+        protected virtual int DynamicFirstLogRow => FIRSTLOGROW;
+
+        /// <summary>Last row used for log text output. Override in subclasses for dynamic layouts.</summary>
+        protected virtual int DynamicLastLogRow  => LASTLOGROW;
+
+        /// <summary>
+        /// Maximum characters per log line written to the console.
+        /// Defaults to the full buffer width minus borders.
+        /// Override in split-panel layouts to constrain output to the log panel only.
+        /// </summary>
+        protected virtual int LogLineWidth => Console.BufferWidth - 4;
+
         /// <summary>
         /// 
         /// </summary>
@@ -72,6 +86,28 @@ namespace Meridian59.Bot
         /// 
         /// </summary>
         protected int logLine = FIRSTLOGROW;
+
+        /// <summary>
+        /// Random for movement
+        /// </summary>
+        protected Random random = new Random();
+
+        /// <summary>
+        /// Enables random movement for load testing
+        /// </summary>
+        public bool IsRandomMoving { get; set; }
+
+        protected bool sentUseCharacter = false;
+
+        /// <summary>
+        /// Collects latency samples for load testing. Accessible to subclasses.
+        /// </summary>
+        public LoadTestMetrics Metrics { get; } = new LoadTestMetrics();
+
+        /// <summary>
+        /// Tracks when RTT was last sampled to avoid flooding the metrics with duplicate readings.
+        /// </summary>
+        private long lastRttSampleMs = 0;
 
         /// <summary>
         /// Set this to true if you run the instance in a windows service environment.
@@ -101,10 +137,13 @@ namespace Meridian59.Bot
         /// </summary>
         /// <param name="Type"></param>
         /// <param name="Text"></param>
-        public virtual void Log(string Type, string Text)
+        public override void Log(string Type, string Text)
         {
-            // do some string detection
-            if (Type == "CHAT")
+            if (IsService)
+            {
+                base.Log(Type, Text);
+                return;
+            }
             {
                 if (Text.Contains(ChatSubStrings.NOTENOUGHMANA))
                     Type = "WARN";
@@ -133,11 +172,11 @@ namespace Meridian59.Bot
             if (!IsService)
             {
                 // prepare text length
-                if (Text.Length > Console.BufferWidth - 4)
-                    Text = Text.Substring(0, Console.BufferWidth - 7) + "...";
+                if (Text.Length > LogLineWidth)
+                    Text = Text.Substring(0, LogLineWidth - 3) + "...";
 
                 else
-                    Text = Text.PadRight(Console.BufferWidth - 4);
+                    Text = Text.PadRight(LogLineWidth);
 
                 // set color
                 switch (Type)
@@ -163,21 +202,21 @@ namespace Meridian59.Bot
                 Console.SetCursorPosition(2, logLine);
                 Console.Write(Text);
 
-                if (logLine < LASTLOGROW)
+                if (logLine < DynamicLastLogRow)
                 {
                     logLine++;
 
                     Console.SetCursorPosition(2, logLine);
-                    Console.Write(String.Empty.PadLeft(Console.BufferWidth - 4));
+                    Console.Write(String.Empty.PadLeft(LogLineWidth));
 
-                    if (logLine < LASTLOGROW - 1)
+                    if (logLine < DynamicLastLogRow - 1)
                     {
                         Console.SetCursorPosition(2, logLine + 1);
-                        Console.Write(String.Empty.PadLeft(Console.BufferWidth - 4));
+                        Console.Write(String.Empty.PadLeft(LogLineWidth));
                     }
                 }
                 else
-                    logLine = FIRSTLOGROW;
+                    logLine = DynamicFirstLogRow;
 
                 // restore color
                 Console.ForegroundColor = COLORDEFAULT;
@@ -254,32 +293,29 @@ namespace Meridian59.Bot
             Thread.Sleep(SLEEPAFTERERROR);
         }
 
+        protected bool sentSendCharacters = false;
+
         /// <summary>
         /// 
         /// </summary>
         /// <param name="Message"></param>
         protected override void HandleGameModeMessage(GameModeMessage Message)
         {
+            if (Config.IsDebugEnabled)
+                Log("DEBUG", "PI=" + Message.PI + " (" + ((MessageTypeGameMode)Message.PI).ToString() + ")");
+
             base.HandleGameModeMessage(Message);
+        }
 
-            switch ((MessageTypeGameMode)Message.PI)
-            {
-                case MessageTypeGameMode.Player:
-                    HandlePlayerMessage((PlayerMessage)Message);
-                    break;
+        protected override void HandleLoadModuleMessage(LoadModuleMessage Message)
+        {
+            Log("DEBUG", "LoadModule resource ID: " + Message.ResourceID);
+            base.HandleLoadModuleMessage(Message);
+        }
 
-                case MessageTypeGameMode.Offer:
-                    HandleOfferMessage((OfferMessage)Message);
-                    break;
-
-                case MessageTypeGameMode.CounterOffer:
-                    HandleCounterOfferMessage((CounterOfferMessage)Message);
-                    break;
-
-                case MessageTypeGameMode.Create:
-                    HandleCreateMessage((CreateMessage)Message);
-                    break;
-            }
+        protected virtual void HandleCharInfoOKMessage(CharInfoOkMessage Message)
+        {
+            Log("SYS", "Character configuration accepted.");
         }
 
         /// <summary>
@@ -368,6 +404,7 @@ namespace Meridian59.Bot
         /// <param name="Message"></param>
         protected override void HandleCharactersMessage(CharactersMessage Message)
         {
+            Log("SYS", "Received character list (" + Message.WelcomeInfo.Characters.Count + " characters).");
             bool found = false;
 
             if (Config.SelectedConnectionInfo != null)
@@ -375,11 +412,16 @@ namespace Meridian59.Bot
                 // try to login the character which is defined in config
                 foreach (CharSelectItem character in Message.WelcomeInfo.Characters)
                 {
+                    Log("SYS", "Found character on account: " + character.Name + " (ID: " + character.ID + ")");
                     if (character.Name.ToLower() == Config.SelectedConnectionInfo.Character.ToLower())
                     {
-                        Log("SYS", "Logging in character " + character.Name);
+                        if (!sentUseCharacter)
+                        {
+                            Log("SYS", "Logging in character " + character.Name);
 
-                        SendUseCharacterMessage(new ObjectID(character.ID), true);
+                            SendUseCharacterMessage(new ObjectID(character.ID), true);
+                            sentUseCharacter = true;
+                        }
                         found = true;
                         break;
                     }
@@ -404,9 +446,20 @@ namespace Meridian59.Bot
         /// 
         /// </summary>
         /// <param name="Message"></param>
+        protected override void HandleQuitMessage(QuitMessage Message)
+        {
+            base.HandleQuitMessage(Message);
+            sentUseCharacter = false;
+        }
+
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <param name="Message"></param>
         protected override void HandlePlayerMessage(PlayerMessage Message)
         {
-            base.HandlePlayerMessage(Message);         
+            base.HandlePlayerMessage(Message);
+            Log("SYS", "Entered room: " + Message.RoomInfo.RoomName);
         }
 
         /// <summary>
@@ -477,7 +530,22 @@ namespace Meridian59.Bot
         /// </summary>
         /// <param name="PartnerID">Command invoked by this (player) id</param>
         /// <param name="Words">First elment is command name</param>
-        protected abstract void ProcessCommand(uint PartnerID, string[] Words);
+        protected virtual void ProcessCommand(uint PartnerID, string[] Words)
+        {
+            if (Words.Length >= 2 && Words[0] == "!move")
+            {
+                if (Words[1] == "on")
+                {
+                    IsRandomMoving = true;
+                    Log("SYS", "Random movement enabled.");
+                }
+                else if (Words[1] == "off")
+                {
+                    IsRandomMoving = false;
+                    Log("SYS", "Random movement disabled.");
+                }
+            }
+        }
 
         /// <summary>
         /// 
@@ -485,6 +553,21 @@ namespace Meridian59.Bot
         public override void Update()
         {
             base.Update();
+
+            // handle random movement
+            if (IsRandomMoving && Data.AvatarObject != null && !Data.AvatarObject.IsMoving)
+            {
+                // pick a random spot in the room
+                // Meridian 59 coordinates are usually 0-128
+                ushort x = (ushort)random.Next(20, 100);
+                ushort y = (ushort)random.Next(20, 100);
+                byte speed = (byte)random.Next(64, 255);
+
+                V2 destination = new V2(x, y);
+                Data.AvatarObject.StartMoveTo(ref destination, speed);
+
+                Log("BOT", "Random move to " + x + "/" + y + " with speed " + speed);
+            }
 
             // update some values and read input for NON service instances
             if (!IsService)
@@ -590,6 +673,30 @@ namespace Meridian59.Bot
                 case DataController.PROPNAME_ISRESTING:
                     DrawResting();
                     break;
+
+                case DataController.PROPNAME_AVATAROBJECT:
+                    if (Data.AvatarObject != null)
+                    {
+                        Log("DEBUG", "AvatarObject assigned to DataController. (ID: " + Data.AvatarObject.ID + ")");
+                        Data.AvatarObject.PropertyChanged += OnAvatarPropertyChanged;
+                        DrawCoordinates();
+                        DrawCondition();
+                        DrawRoom();
+                    }
+                    break;
+            }
+        }
+
+        protected virtual void OnAvatarPropertyChanged(object sender, PropertyChangedEventArgs e)
+        {
+            switch (e.PropertyName)
+            {
+                case RoomObject.PROPNAME_COORDINATEX:
+                case RoomObject.PROPNAME_COORDINATEY:
+                case RoomObject.PROPNAME_ANGLE:
+                case RoomObject.PROPNAME_ANGLEUNITS:
+                    DrawCoordinates();
+                    break;
             }
         }
 
@@ -639,6 +746,11 @@ namespace Meridian59.Bot
         /// <summary>
         /// 
         /// </summary>
+        public override void SendReqMoveMessage(bool ForceSend = false)
+        {
+            base.SendReqMoveMessage(ForceSend);
+        }
+
         public void Dispose()
         {
         }
@@ -665,6 +777,100 @@ namespace Meridian59.Bot
                     // reload
                     Config.Load(Config.ConfigFile, Config.ConfigFileAlt);
                     break;
+
+                case ConsoleKey.M:
+                    DumpMetrics();
+                    break;
+
+                case ConsoleKey.G:
+                    DumpTimeSeries();
+                    break;
+
+                case ConsoleKey.S:
+                    SaveMetrics();
+                    break;
+            }
+        }
+
+        /// <summary>
+        /// Logs all collected metrics as histograms to the console log area.
+        /// </summary>
+        public void DumpMetrics()
+        {
+            List<string> names = Metrics.GetNames();
+            if (names.Count == 0)
+            {
+                Log("METR", "No metrics collected yet.");
+                return;
+            }
+            foreach (string name in names)
+            {
+                string output = Metrics.RenderHistogram(name);
+                LogMultiline("METR", output);
+            }
+        }
+
+        /// <summary>
+        /// Logs all collected metrics as time-series line graphs to the console log area.
+        /// </summary>
+        public void DumpTimeSeries()
+        {
+            List<string> names = Metrics.GetNames();
+            if (names.Count == 0)
+            {
+                Log("METR", "No metrics collected yet.");
+                return;
+            }
+            foreach (string name in names)
+            {
+                string output = Metrics.RenderTimeSeries(name);
+                LogMultiline("METR", output);
+            }
+        }
+
+        /// <summary>
+        /// Saves all collected metrics to a timestamped file next to the log file (or current dir).
+        /// </summary>
+        public void SaveMetrics()
+        {
+            List<string> names = Metrics.GetNames();
+            if (names.Count == 0)
+            {
+                Log("METR", "No metrics to save.");
+                return;
+            }
+
+            string timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+            string filename = "metrics_" + timestamp + ".txt";
+
+            // Place alongside the configured log file if one exists, else current dir
+            if (Config.HasLogFile())
+            {
+                string dir = Path.GetDirectoryName(Path.GetFullPath(Config.LogFile));
+                filename = Path.Combine(dir, filename);
+            }
+
+            try
+            {
+                Metrics.SaveToFile(filename);
+                Log("METR", "Metrics saved: " + filename);
+            }
+            catch (Exception ex)
+            {
+                Log("ERROR", "Failed to save metrics: " + ex.Message);
+            }
+        }
+
+        /// <summary>
+        /// Splits a multi-line string and logs each line individually.
+        /// </summary>
+        private void LogMultiline(string type, string text)
+        {
+            foreach (string line in text.Split('\n'))
+            {
+                string trimmed = line.TrimEnd('\r');
+                if (trimmed.Length > 0)
+                    Log(type, trimmed);
             }
         }
 
@@ -715,7 +921,7 @@ namespace Meridian59.Bot
             if (IsService)
                 return;
 
-            string room = Data.RoomInformation.RoomName;
+            string room = Data.RoomInformation?.RoomName ?? "";
 
             if (room.Length > 35)
                 room = room.Substring(0, 32) + "...";
@@ -751,6 +957,14 @@ namespace Meridian59.Bot
 
             Console.SetCursorPosition(22, 3);
             Console.Write((ServerConnection.RTT.ToString() + "ms").PadRight(6));
+
+            // sample RTT into metrics once per second
+            long nowMs = DateTime.UtcNow.Ticks / TimeSpan.TicksPerMillisecond;
+            if (nowMs - lastRttSampleMs >= 1000)
+            {
+                lastRttSampleMs = nowMs;
+                Metrics.Record("rtt_ms", ServerConnection.RTT);
+            }
         }
 
         /// <summary>
@@ -840,7 +1054,7 @@ namespace Meridian59.Bot
             Console.Write("╠══════════════╦══════════════════╦════════════════════╦═══════════════════════╣");
             
             Console.SetCursorPosition(0, 22);
-            Console.Write("║ [Q]uit       ║ [R]eload config  ║                    ║                       ║");
+            Console.Write("║ [Q]uit       ║ [R]eload config  ║ [M]etrics [G]raph  ║ [S]ave metrics        ║");
 
             Console.SetCursorPosition(0, 23);
             Console.Write("╚══════════════╩══════════════════╩════════════════════╩═══════════════════════╝");

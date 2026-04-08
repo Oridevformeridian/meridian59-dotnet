@@ -33,11 +33,11 @@ namespace Meridian59.Common
         public const uint OFFSET = 1400000000;
         public const uint CONVERTOFFSET = 0;
 #elif OPENMERIDIAN
-        public const uint OFFSET = 1690441200;
+        public const uint OFFSET = 1388534400;
         public const uint CONVERTOFFSET = 0;
 #else
         public const uint OFFSET = 0;
-        public const uint CONVERTOFFSET = 1690441200;
+        public const uint CONVERTOFFSET = 1388534400;
 #endif
 
         /// <summary>

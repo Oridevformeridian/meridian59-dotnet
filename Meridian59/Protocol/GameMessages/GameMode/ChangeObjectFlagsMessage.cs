@@ -80,7 +80,7 @@ namespace Meridian59.Protocol.GameMessages
         }
 
         public ChangeObjectFlagsMessage(byte[] Buffer, int StartIndex = 0) 
-            : base (Buffer, StartIndex = 0) { }
+            : base (Buffer, StartIndex) { }
 
         public unsafe ChangeObjectFlagsMessage(ref byte* Buffer)
             : base(ref Buffer) { }

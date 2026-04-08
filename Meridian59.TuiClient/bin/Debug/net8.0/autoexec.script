@@ -1,0 +1,8 @@
+# Restore mana and vigor - needs ~90s to recover from depleted state
+rest
+sleep 15000
+stand
+sleep 1000
+cast blink
+sleep 8000
+

@@ -106,7 +106,7 @@ namespace Meridian59.Protocol.GameMessages
         }
 
         public SpellsMessage(byte[] Buffer, int StartIndex = 0) 
-            : base (Buffer, StartIndex = 0) { }
+            : base (Buffer, StartIndex) { }
 
         public unsafe SpellsMessage(ref byte* Buffer)
             : base(ref Buffer) { }

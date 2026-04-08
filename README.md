@@ -1,10 +1,6 @@
-[![Self-hosted test on Push](https://github.com/roge-life/meridian59-dotnet/actions/workflows/buildonpush.yml/badge.svg)](https://github.com/roge-life/meridian59-dotnet/actions/workflows/buildonpush.yml)
 # Meridian 59: New 3D client and developer tools
 
 # Latest News
-
-## 13 Oct 2023
-New OgreClient version 1.0.5.7b has been released.
 
 ## 13 September 2018
 New OgreClient version 1.0.5.6 has been released, visit the wiki [changelog](https://github.com/cyberjunk/meridian59-dotnet/wiki/Meridian59.Ogre.Client-ChangeLog) for more details.
@@ -44,7 +40,6 @@ You can build binaries compatible with different branches of the game by using p
 | 101/102  | VANILLA          |  Minimal      | [Meridian59com](http://www.meridian59.com) |
 
 # Wiki
-.
+
 Visit the <a href="https://github.com/cyberjunk/meridian59-dotnet/wiki">wiki</a> for more information about the different projects/tools (including more details about OgreClient)
--
 

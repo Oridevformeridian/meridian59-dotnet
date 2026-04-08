@@ -550,6 +550,7 @@ namespace Meridian59 { namespace Ogre
          static void Destroy();
          static void ApplyLanguage();
          static void SetButtons();
+         static void SetTooltips();
          static void OnDataPropertyChanged(Object^ sender, PropertyChangedEventArgs^ e);
          static void OnTargetObjectPropertyChanged(Object^ sender, PropertyChangedEventArgs^ e);
          static void OnNewImageAvailable(Object^ sender, ::System::EventArgs^ e);
@@ -1373,8 +1374,6 @@ namespace Meridian59 { namespace Ogre
          static ::CEGUI::Window* TabInputTabGeneral = nullptr;
          static ::CEGUI::Window* TabInputTabActionButtons1 = nullptr;
          static ::CEGUI::Window* TabInputTabActionButtons2 = nullptr;
-		 
-		 static ::CEGUI::Window* TabInputTabActionButtons3 = nullptr;
 
          //
          static ::CEGUI::Combobox* Display = nullptr;
@@ -1492,19 +1491,6 @@ namespace Meridian59 { namespace Ogre
          static ::CEGUI::PushButton* LearnAction46 = nullptr;
          static ::CEGUI::PushButton* LearnAction47 = nullptr;
          static ::CEGUI::PushButton* LearnAction48 = nullptr;
-
-		 static ::CEGUI::PushButton* LearnAction49 = nullptr;
-		 static ::CEGUI::PushButton* LearnAction50 = nullptr;
-		 static ::CEGUI::PushButton* LearnAction51 = nullptr;
-		 static ::CEGUI::PushButton* LearnAction52 = nullptr;
-		 static ::CEGUI::PushButton* LearnAction53 = nullptr;
-		 static ::CEGUI::PushButton* LearnAction54 = nullptr;
-		 static ::CEGUI::PushButton* LearnAction55 = nullptr;
-		 static ::CEGUI::PushButton* LearnAction56 = nullptr;
-		 static ::CEGUI::PushButton* LearnAction57 = nullptr;
-		 static ::CEGUI::PushButton* LearnAction58 = nullptr;
-		 static ::CEGUI::PushButton* LearnAction59 = nullptr;
-		 static ::CEGUI::PushButton* LearnAction60 = nullptr;
 
          //
          static ::CEGUI::ItemListbox* ListAliases = nullptr;

@@ -60,7 +60,7 @@ namespace Meridian59.Client
         /// <summary>
         /// Sleep this long at the end of Tick()
         /// </summary>
-        protected static int SLEEPTIME = 0;
+        public static int SLEEPTIME = 0;
 
         /// <summary>
         /// If this turns false the application quits
@@ -139,6 +139,7 @@ namespace Meridian59.Client
 
             // Initialize DataController
             Data = new D();
+            Data.OnLog += (type, text) => Log(type, text);
 
             // read in config
             Config = new C();
@@ -215,6 +216,16 @@ namespace Meridian59.Client
         /// Implement this with your code for each tick/update.
         /// </summary>
         public abstract void Update();
+
+        /// <summary>
+        /// Logs a message. Overwrite if necessary.
+        /// </summary>
+        /// <param name="Type"></param>
+        /// <param name="Text"></param>
+        public virtual void Log(string Type, string Text)
+        {
+            Logger.Log(MODULENAME, LogType.Info, "[" + Type + "] " + Text);
+        }
         
         /// <summary>
         /// Cleanup, runs after loop exits
@@ -235,21 +246,20 @@ namespace Meridian59.Client
              * so they appear as GenericGameMessage
              */
 
+            if (Message.PI == 139)
+            {
+                Logger.Log(MODULENAME, LogType.Info, "DEBUG: RootClient received BP_CHARACTERS (PI 139)");
+            }
+
             if (!Message.Header.HasEmptyBody)
             {
                 if (Message is LoginModeMessage)
                 {
-                    // always handle in datalayer first to have updated info
-                    Data.HandleIncomingLoginModeMessage(Message);
-
                     // own handlers
                     HandleLoginModeMessage((LoginModeMessage)Message);
                 }
                 else if (Message is GameModeMessage)
                 {
-                    // always handle in datalayer first to have updated info
-                    Data.HandleIncomingGameModeMessage(Message);
-
                     // let roomfile handle message for changes
                     if (CurrentRoom != null)
                         CurrentRoom.HandleGameModeMessage((GameModeMessage)Message);

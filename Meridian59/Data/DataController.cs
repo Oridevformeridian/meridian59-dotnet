@@ -26,6 +26,7 @@ using Meridian59.Common.Enums;
 using Meridian59.Common.Constants;
 using Meridian59.Common.Interfaces;
 using Meridian59.Files.ROO;
+using Meridian59.Protocol;
 
 // Switch FP precision based on architecture
 #if X64
@@ -41,7 +42,7 @@ namespace Meridian59.Data
     /// This contains basically any information you need at runtime.
     /// Make sure to call the Message handlers.
     /// </summary>
-    public class DataController : INotifyPropertyChanged, ITickable, IStringResolvable
+    public class DataController : MessageEnrichment, INotifyPropertyChanged, ITickable, IStringResolvable
     {
         #region Constants
         public const string PROPNAME_AVATAROBJECT = "AvatarObject";
@@ -60,6 +61,15 @@ namespace Meridian59.Data
         public const string PROPNAME_VIEWERPOSITION = "ViewerPosition";
         public const string PROPNAME_ACCOUNTTYPE = "AccountType";
         public const string PROPNAME_UIMODE = "UIMode";
+        #endregion
+
+        #region Events
+        public event Action<string, string> OnLog;
+
+        protected void Log(string Type, string Text)
+        {
+            if (OnLog != null) OnLog(Type, Text);
+        }
         #endregion
 
         #region INotifyPropertyChanged
@@ -184,6 +194,26 @@ namespace Meridian59.Data
         /// Your attributes (STR, STAM, ...)
         /// </summary>
         public StatNumericList AvatarAttributes { get { return avatarAttributes; } }
+
+        /// <summary>
+        /// Total money (shillings) in inventory
+        /// </summary>
+        public uint Money
+        {
+            get
+            {
+                uint sum = 0;
+                if (inventoryObjects != null)
+                {
+                    foreach (InventoryObject obj in inventoryObjects)
+                    {
+                        if (obj.Name != null && obj.Name.ToLower() == "shilling")
+                            sum += obj.Count;
+                    }
+                }
+                return sum;
+            }
+        }
 
         /// <summary>
         /// Your skills (slash, block, ...)
@@ -428,7 +458,19 @@ namespace Meridian59.Data
         /// <summary>
         /// The ID of your avatar
         /// </summary>
-        public uint AvatarID { get; set; }
+        private uint avatarID;
+        public uint AvatarID 
+        { 
+            get { return avatarID; }
+            set 
+            { 
+                if (avatarID != value)
+                {
+                    Logger.Log("DataController", LogType.Info, $"AvatarID change: {avatarID} -> {value}");
+                    avatarID = value; 
+                }
+            }
+        }
 
         /// <summary>
         /// Whether cast/uses are go on yourself.
@@ -527,6 +569,7 @@ namespace Meridian59.Data
             {
                 if (avatarObject != value)
                 {
+                    Logger.Log("DataController", LogType.Info, $"AvatarObject changed: {(avatarObject != null ? avatarObject.ID.ToString() : "null")} -> {(value != null ? value.ID.ToString() : "null")}");
                     avatarObject = value;
                     RaisePropertyChanged(new PropertyChangedEventArgs(PROPNAME_AVATAROBJECT));
                 }
@@ -1025,7 +1068,6 @@ namespace Meridian59.Data
             ClickedTargets.Clear();
 
             // clear single data models
-            Effects.Clear(true);
             GuildInfo.Clear(true);
             GuildAskData.Clear(true);
             DiplomacyInfo.Clear(true);
@@ -1768,14 +1810,9 @@ namespace Meridian59.Data
         #endregion
 
         #region Message handling
-        /// <summary>
-        /// Call with any incoming LoginModeMessage
-        /// </summary>
-        /// <param name="Message"></param>
-        public void HandleIncomingLoginModeMessage(GameMessage Message)
+        protected override void HandleLoginModeMessage(LoginModeMessage Message)
         {
-            // possibly log it
-            LogIncomingLoginModeMessage(Message);
+            base.HandleLoginModeMessage(Message);
 
             // select the handler
             switch ((MessageTypeLoginMode)Message.PI)
@@ -1786,14 +1823,9 @@ namespace Meridian59.Data
             }
         }
 
-        /// <summary>
-        /// Call with any incoming GameModeMessage
-        /// </summary>
-        /// <param name="Message"></param>
-        public void HandleIncomingGameModeMessage(GameMessage Message)
+        public override void HandleGameModeMessage(GameModeMessage Message)
         {
-            // possibly log it
-            LogIncomingGameModeMessage(Message);
+            base.HandleGameModeMessage(Message);
 
             // select the handler
             switch ((MessageTypeGameMode)Message.PI)
@@ -1844,7 +1876,6 @@ namespace Meridian59.Data
                     break;
 
                 case MessageTypeGameMode.StatGroup:                 // 132
-                    HandleStatGroup((StatGroupMessage)Message);
                     break;
 
                 case MessageTypeGameMode.RoomContents:              // 134
@@ -1852,27 +1883,21 @@ namespace Meridian59.Data
                     break;
 
                 case MessageTypeGameMode.ObjectContents:            // 135
-                    HandleObjectContents((ObjectContentsMessage)Message);
                     break;
 
                 case MessageTypeGameMode.Players:                   // 136
-                    HandlePlayers((PlayersMessage)Message);
                     break;
 
                 case MessageTypeGameMode.PlayerAdd:                 // 137
-                    HandlePlayerAdd((PlayerAddMessage)Message);
                     break;
 
                 case MessageTypeGameMode.PlayerRemove:              // 138
-                    HandlePlayerRemove((PlayerRemoveMessage)Message);
                     break;
 
                 case MessageTypeGameMode.Characters:                // 139
-                    HandleCharacters((CharactersMessage)Message);
                     break;
 
                 case MessageTypeGameMode.CharInfo:                  // 140
-                    HandleCharInfo((CharInfoMessage)Message);
                     break;
 
                 case MessageTypeGameMode.Spells:                    // 141
@@ -2092,17 +2117,29 @@ namespace Meridian59.Data
             OnlinePlayers.RemoveByID(Message.ObjectID);           
         }
 
-        protected virtual void HandleCharacters(CharactersMessage Message)
+        protected override void HandleCharactersMessage(CharactersMessage Message)
         {
+            base.HandleCharactersMessage(Message);
             WelcomeInfo.UpdateFromModel(Message.WelcomeInfo, true);
         }
 
-        protected virtual void HandleCharInfo(CharInfoMessage Message)
+        protected virtual void HandleCharacters(CharactersMessage Message)
         {
+            HandleCharactersMessage(Message);
+        }
+
+        protected override void HandleCharInfoMessage(CharInfoMessage Message)
+        {
+            base.HandleCharInfoMessage(Message);
             CharCreationInfo.UpdateFromModel(Message.CharCreationInfo, true);
 
             // set example datamodel to default
             CharCreationInfo.SetExampleModel();
+        }
+
+        protected virtual void HandleCharInfo(CharInfoMessage Message)
+        {
+            HandleCharInfoMessage(Message);
         }
 
 #if !VANILLA && !OPENMERIDIAN
@@ -2166,6 +2203,11 @@ namespace Meridian59.Data
                     avatar = Model;
                     break;
                 }
+            }
+
+            if (avatar == null)
+            {
+                Log("DEBUG", "AVATAR NOT FOUND in RoomContents object list!");
             }
 
             // now add the avatar first
@@ -2249,6 +2291,15 @@ namespace Meridian59.Data
 
             V2 viewPos2D = viewerPosition.XZ;
 
+            // our avatar
+            if (obj.ID == AvatarID)
+            {
+                Logger.Log("SYNC", LogType.Info, "Avatar object identified with ID: " + obj.ID);
+                // mark it and save ref
+                obj.IsAvatar = true;
+                AvatarObject = obj;
+            }
+
             // init some values which will be updated on triggers (e.g. moves)
             obj.UpdateDistanceToAvatarSquared(avatarObject);
             obj.UpdateViewerAngle(ref viewPos2D);
@@ -2324,6 +2375,7 @@ namespace Meridian59.Data
 
         protected virtual void HandlePlayer(PlayerMessage Message)
         {
+            Logger.Log("DataController", LogType.Info, "HandlePlayer: AvatarID=" + Message.RoomInfo.AvatarID);
             // detach old sectormove listener
             if (RoomInformation.ResourceRoom != null)
                 RoomInformation.ResourceRoom.SectorMoved -= OnRoomSectorMoved;
@@ -2370,7 +2422,187 @@ namespace Meridian59.Data
             RoomInformation.BackgroundFile = Message.ResourceID.Name;
         }
 
-        protected virtual void HandlePlayerOverlay(PlayerOverlayMessage Message)
+        protected override void HandleRoomContentsMessage(RoomContentsMessage Message)
+        {
+            base.HandleRoomContentsMessage(Message);
+            HandleRoomContents(Message);
+        }
+
+        protected override void HandleObjectContentsMessage(ObjectContentsMessage Message)
+        {
+            base.HandleObjectContentsMessage(Message);
+            HandleObjectContents(Message);
+        }
+
+        protected override void HandleInventoryMessage(InventoryMessage Message)
+        {
+            base.HandleInventoryMessage(Message);
+            HandleInventory(Message);
+        }
+
+        protected override void HandleInventoryAddMessage(InventoryAddMessage Message)
+        {
+            base.HandleInventoryAddMessage(Message);
+            HandleInventoryAdd(Message);
+        }
+
+        protected override void HandleSpellsMessage(SpellsMessage Message)
+        {
+            base.HandleSpellsMessage(Message);
+            HandleSpells(Message);
+        }
+
+        protected override void HandleSpellAddMessage(SpellAddMessage Message)
+        {
+            base.HandleSpellAddMessage(Message);
+            HandleSpellAdd(Message);
+        }
+
+        protected override void HandleSkillsMessage(SkillsMessage Message)
+        {
+            base.HandleSkillsMessage(Message);
+            HandleSkills(Message);
+        }
+
+        protected override void HandleSkillAddMessage(SkillAddMessage Message)
+        {
+            base.HandleSkillAddMessage(Message);
+            HandleSkillAdd(Message);
+        }
+
+        protected override void HandleStatGroupMessage(StatGroupMessage Message)
+        {
+            base.HandleStatGroupMessage(Message);
+            HandleStatGroup(Message);
+        }
+
+        protected override void HandleStatMessage(StatMessage Message)
+        {
+            base.HandleStatMessage(Message);
+            HandleStat(Message);
+        }
+
+        protected override void HandleAddEnchantmentMessage(AddEnchantmentMessage Message)
+        {
+            base.HandleAddEnchantmentMessage(Message);
+            HandleAddEnchantment(Message);
+        }
+
+        protected override void HandleBackgroundMessage(BackgroundMessage Message)
+        {
+            base.HandleBackgroundMessage(Message);
+            HandleBackground(Message);
+        }
+
+        protected override void HandleUserCommandMessage(UserCommandMessage Message)
+        {
+            base.HandleUserCommandMessage(Message);
+            HandleUserCommand(Message);
+        }
+
+        protected override void HandlePlayWaveMessage(PlayWaveMessage Message)
+        {
+            base.HandlePlayWaveMessage(Message);
+            HandlePlayWave(Message);
+        }
+
+        protected override void HandlePlayMusicMessage(PlayMusicMessage Message)
+        {
+            base.HandlePlayMusicMessage(Message);
+            HandlePlayMusic(Message);
+        }
+
+        protected override void HandleLookNewsGroupMessage(LookNewsGroupMessage Message)
+        {
+            base.HandleLookNewsGroupMessage(Message);
+            HandleLookNewsGroup(Message);
+        }
+
+        protected override void HandleShootMessage(ShootMessage Message)
+        {
+            base.HandleShootMessage(Message);
+            HandleShoot(Message);
+        }
+
+        protected override void HandleLookMessage(LookMessage Message)
+        {
+            base.HandleLookMessage(Message);
+            HandleLook(Message);
+        }
+
+        protected override void HandleLookSpellMessage(LookSpellMessage Message)
+        {
+            base.HandleLookSpellMessage(Message);
+            HandleLookSpell(Message);
+        }
+
+        protected override void HandleLookSkillMessage(LookSkillMessage Message)
+        {
+            base.HandleLookSkillMessage(Message);
+            HandleLookSkill(Message);
+        }
+
+        protected override void HandleOfferMessage(OfferMessage Message)
+        {
+            base.HandleOfferMessage(Message);
+            HandleOffer(Message);
+        }
+
+        protected override void HandleOfferedMessage(OfferedMessage Message)
+        {
+            base.HandleOfferedMessage(Message);
+            HandleOffered(Message);
+        }
+
+        protected override void HandleCounterOfferMessage(CounterOfferMessage Message)
+        {
+            base.HandleCounterOfferMessage(Message);
+            HandleCounterOffer(Message);
+        }
+
+        protected override void HandleCounterOfferedMessage(CounterOfferedMessage Message)
+        {
+            base.HandleCounterOfferedMessage(Message);
+            HandleCounterOffered(Message);
+        }
+
+        protected override void HandleBuyListMessage(BuyListMessage Message)
+        {
+            base.HandleBuyListMessage(Message);
+            HandleBuyList(Message);
+        }
+
+        protected override void HandleQuestUIListMessage(QuestUIListMessage Message)
+        {
+            base.HandleQuestUIListMessage(Message);
+            HandleQuestUIList(Message);
+        }
+
+        protected override void HandleCreateMessage(CreateMessage Message)
+        {
+            base.HandleCreateMessage(Message);
+            HandleCreate(Message);
+        }
+
+        protected override void HandleChangeMessage(ChangeMessage Message)
+        {
+            base.HandleChangeMessage(Message);
+            HandleChange(Message);
+        }
+
+        protected override void HandleChangeTextureMessage(ChangeTextureMessage Message)
+        {
+            base.HandleChangeTextureMessage(Message);
+            // HandleChangeTexture(Message);
+        }
+
+        protected override void HandlePlayerOverlay(PlayerOverlayMessage Message)
+        {
+            base.HandlePlayerOverlay(Message);
+            HandlePlayerOverlayInternal(Message);
+        }
+
+        protected virtual void HandlePlayerOverlayInternal(PlayerOverlayMessage Message)
         {
             // remove
             if (Message.HandItemObject.RenderPosition == PlayerOverlayHotspot.HOTSPOT_HIDE)
@@ -2404,6 +2636,12 @@ namespace Meridian59.Data
                     PlayerOverlays.Add(Message.HandItemObject);
                 }               
             }
+        }
+
+        protected override void HandlePlayerMessage(PlayerMessage Message)
+        {
+            base.HandlePlayerMessage(Message);
+            HandlePlayer(Message);
         }
 
         protected virtual void HandleLightAmbient(LightAmbientMessage Message)
@@ -3036,6 +3274,7 @@ namespace Meridian59.Data
             QuestUIInfo.QuestList.Clear();
 
             // add new quests, in specific order (active, then valid, then invalid).
+#if !VANILLA
             foreach (QuestObjectInfo entry in Message.Quests)
                 if (entry.ObjectBase.Flags.Player == ObjectFlags.PlayerType.QuestActive)
                     QuestUIInfo.QuestList.Add(entry);
@@ -3046,6 +3285,9 @@ namespace Meridian59.Data
                 if (entry.ObjectBase.Flags.Player != ObjectFlags.PlayerType.QuestActive
                     && entry.ObjectBase.Flags.Player != ObjectFlags.PlayerType.QuestValid)
                     QuestUIInfo.QuestList.Add(entry);
+#else
+            QuestUIInfo.QuestList.AddRange(Message.Quests);
+#endif
 
             // set visible
             QuestUIInfo.IsVisible = true;

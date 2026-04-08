@@ -106,7 +106,7 @@ namespace Meridian59.Protocol.GameMessages
         }
 
         public InventoryMessage(byte[] Buffer, int StartIndex = 0) 
-            : base (Buffer, StartIndex = 0) { }
+            : base (Buffer, StartIndex) { }
 
         public unsafe InventoryMessage(ref byte* Buffer)
             : base(ref Buffer) { } 

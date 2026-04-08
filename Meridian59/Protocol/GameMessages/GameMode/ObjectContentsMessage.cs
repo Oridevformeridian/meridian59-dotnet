@@ -120,7 +120,7 @@ namespace Meridian59.Protocol.GameMessages
         }
 
         public ObjectContentsMessage(byte[] Buffer, int StartIndex = 0) 
-            : base (Buffer, StartIndex = 0) { }
+            : base (Buffer, StartIndex) { }
 
         public unsafe ObjectContentsMessage(ref byte* Buffer)
             : base(ref Buffer) { } 

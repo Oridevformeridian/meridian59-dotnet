@@ -30,7 +30,6 @@ using Meridian59.Protocol.GameMessages;
 using Meridian59.Protocol.SubMessage;
 using Meridian59.Files;
 using Meridian59.Files.ROO;
-using System.Collections;
 
 // Switch FP precision based on architecture
 #if X64
@@ -67,9 +66,6 @@ namespace Meridian59.Client
         #endregion
 
         #region Fields
-        protected long ztime = 0;
-        protected long macronext = 0;
-        
         protected uint tpsCounter    = 0;
         protected double tpsSum      = 0.0f;
         protected double tickWorst   = 0.0f;
@@ -79,14 +75,13 @@ namespace Meridian59.Client
         protected ushort lastSentPositionY = 0;
         protected RooSector lastSentSector = null;
         #endregion
-        
+      
         #region Major components
         public ServerConnection ServerConnection { get; protected set; }
         public MessageEnrichment MessageEnrichment { get; protected set; }
         public DownloadHandler DownloadHandler { get; protected set; }
         #endregion
-        private Queue inputMacroQueue = new Queue();
-        private String macrolast = "";
+
         #region Constructors
         /// <summary>
         /// Constructor
@@ -96,9 +91,14 @@ namespace Meridian59.Client
         {            
             // Initialize NetworkClient
             ServerConnection = new ServerConnection(ResourceManager.StringResources);
+            ServerConnection.OnLog += (type, text) => Log(type, text);
 
-            // Initialize resource loader (message enrichment thread)
-            MessageEnrichment = new MessageEnrichment(ResourceManager, ServerConnection);
+            // Init Data layer with enrichment requirements
+            Data.Init(ResourceManager, ServerConnection);
+            Data.Start();
+
+            // Initialize resource loader (use the Data instance which is now a MessageEnrichment)
+            MessageEnrichment = Data;
 
             // Initialize a download handler in case an update is needed.
             DownloadHandler = new DownloadHandler();
@@ -199,13 +199,6 @@ namespace Meridian59.Client
 
             // possibly send a position update
             SendReqMoveMessage();
-
-            // relative clock for a RT macro sleep interval
-            ztime = DateTimeOffset.Now.ToUnixTimeMilliseconds();
-
-            // macroHandler dequeues an object on the inputMacroQueue each interval
-            // and sends it to the ExecChatCommand function until it's empty
-            macroHandler();
         }
 
         /// <summary>
@@ -406,7 +399,19 @@ namespace Meridian59.Client
                 case MessageTypeLoginMode.NoCharacters:                     // 37
                     HandleNoCharactersMessage((NoCharactersMessage)Message);
                     break;
+
+                case MessageTypeLoginMode.Game:                             // 25
+                    HandleGameStateMessage((GameStateMessage)Message);
+                    break;
             }
+        }
+
+        /// <summary>
+        /// Handled when the server transitions to game mode.
+        /// </summary>
+        /// <param name="Message"></param>
+        protected virtual void HandleGameStateMessage(GameStateMessage Message)
+        {
         }
 
         /// <summary>
@@ -437,11 +442,31 @@ namespace Meridian59.Client
                     HandleMailMessage((MailMessage)Message);
                     break;
 
+                // These PI are handled by Data layer (MessageEnrichment/DataController)
+                // We call Data.HandleGameModeMessage explicitly here to ensure processing
+                // but we don't necessarily need a case for all of them if they don't
+                // require client-side logic.
                 case MessageTypeGameMode.Player:                            // 130
-                    HandlePlayerMessage((PlayerMessage)Message);
+                case MessageTypeGameMode.StatGroup:                         // 132
+                case MessageTypeGameMode.RoomContents:                      // 134
+                case MessageTypeGameMode.ObjectContents:                    // 135
+                case MessageTypeGameMode.Players:                           // 136
+                case MessageTypeGameMode.PlayerAdd:                         // 137
+                case MessageTypeGameMode.PlayerRemove:                      // 138
+                case MessageTypeGameMode.CharInfo:                          // 140
+                case MessageTypeGameMode.Spells:                            // 141
+                case MessageTypeGameMode.SpellAdd:                          // 142
+                case MessageTypeGameMode.Skills:                            // 144
+                case MessageTypeGameMode.SkillAdd:                          // 145
+                case MessageTypeGameMode.AddEnchantment:                    // 147
+                    Data.HandleGameModeMessage(Message);
+                    // reactions
+                    if (Message.PI == (byte)MessageTypeGameMode.Player)
+                        HandlePlayerMessage((PlayerMessage)Message);
                     break;
 
                 case MessageTypeGameMode.Characters:                        // 139
+                    Data.HandleGameModeMessage(Message);
                     HandleCharactersMessage((CharactersMessage)Message);
                     break;
 
@@ -453,28 +478,35 @@ namespace Meridian59.Client
                     HandleUserCommandMessage((UserCommandMessage)Message);
                     break;
 
-                case MessageTypeGameMode.PasswordOK:                        // 160
-                    HandlePasswordOKMessage((PasswordOKMessage)Message);
-                    break;
-
-                case MessageTypeGameMode.PasswordNotOK:                     // 161
-                    HandlePasswordNotOKMessage((PasswordNotOKMessage)Message);
+                case MessageTypeGameMode.Said:                              // 206
+                    HandleSaidMessage((SaidMessage)Message);
                     break;
 
                 case MessageTypeGameMode.Admin:                             // 162
                     HandleAdminMessage((AdminMessage)Message);
                     break;
 
-                case MessageTypeGameMode.LookNewsGroup:                     // 180
-                    HandleLookNewsGroupMessage((LookNewsGroupMessage)Message);
-                    break;
-
-                case MessageTypeGameMode.LookupNames:                       // 190
-                    HandleLookupNamesMessage((LookupNamesMessage)Message);
-                    break;
-
-                case MessageTypeGameMode.Said:                              // 206
-                    HandleSaidMessage((SaidMessage)Message);
+                case MessageTypeGameMode.Move:                              // 200
+                case MessageTypeGameMode.Turn:                              // 201
+                case MessageTypeGameMode.Shoot:                             // 202
+                case MessageTypeGameMode.Look:                              // 207
+                case MessageTypeGameMode.LookSpell:                         // 191
+                case MessageTypeGameMode.LookSkill:                         // 192
+                case MessageTypeGameMode.AddBgOverlay:                      // 153
+                case MessageTypeGameMode.ChangeBgOverlay:                   // 154
+                case MessageTypeGameMode.RemoveBgOverlay:                   // 157
+                case MessageTypeGameMode.RemoveEnchantment:                 // 148
+                case MessageTypeGameMode.ChangeTexture:                     // 208
+                case MessageTypeGameMode.ChangeResource:                    // 209
+                case MessageTypeGameMode.Offer:                             // 158
+                case MessageTypeGameMode.CounterOffer:                      // 159
+                case MessageTypeGameMode.Create:                            // 160
+                case MessageTypeGameMode.Remove:                            // 161
+                case MessageTypeGameMode.Action:                            // 163
+                case MessageTypeGameMode.Background:                        // 131
+                case MessageTypeGameMode.Articles:                          // 133
+                case MessageTypeGameMode.SectorMove:                        // 223
+                    Data.HandleGameModeMessage(Message);
                     break;
 
                 case MessageTypeGameMode.InvalidateData:                    // 228
@@ -600,8 +632,19 @@ namespace Meridian59.Client
             string modulefile;
             if (ResourceManager.StringResources.TryGetValue(Message.ResourceID, out modulefile, LanguageCode.English))
             {
-                if (String.Equals(modulefile, CHARDLL))
+                Log("DEBUG", "LoadModule resource " + Message.ResourceID + " resolved to: " + modulefile);
+                if (String.Equals(modulefile, CHARDLL) || Message.ResourceID == 20055)
                 {
+                    SendSendCharactersMessage();
+                }
+            }
+            else
+            {
+                Log("DEBUG", "LoadModule resource " + Message.ResourceID + " NOT FOUND in StringResources");
+                // Fallback for known ID
+                if (Message.ResourceID == 20055)
+                {
+                    Log("DEBUG", "Resource ID 20055 is known to be char.dll, requesting characters...");
                     SendSendCharactersMessage();
                 }
             }
@@ -646,6 +689,14 @@ namespace Meridian59.Client
                rooFile.ResolveResources(ResourceManager);
                rooFile.UncompressAll();
             }
+
+            // reset position tracking for the new room
+            lastSentPositionX = ushort.MaxValue;
+            lastSentPositionY = ushort.MaxValue;
+            lastSentSector = null;
+
+            // send initial position ack
+            SendReqMoveMessage(true);
 
             // trigger a maximum garbage collection after room load
             Util.ForceMaximumGC();
@@ -1610,9 +1661,30 @@ namespace Meridian59.Client
         {
             RoomObject avatar = Data.AvatarObject;
 
-            // must have an avatar object
-            if (avatar == null)
+            // must have an avatar ID at least
+            if (!ObjectID.IsValid(Data.AvatarID))
                 return;
+
+            // if we don't have an avatar object yet, send an initial move message
+            // to trigger the server to send us our character info (some servers need this)
+            if (avatar == null)
+            {
+                if (ForceSend || GameTick.CanReqMove())
+                {
+                    Log("DEBUG", "No avatar object, sending initial position ack (0,0) to trigger character info.");
+
+                    // get message instance (use 0,0 as dummy position)
+                    ReqMoveMessage message = MessagePool.PopReqMove(
+                        0, 0, 0, Data.RoomInformation.RoomID, 0);
+
+                    // send/enqueue it (async)
+                    ServerConnection.SendQueue.Enqueue(message);
+
+                    // save tick we last sent an update
+                    GameTick.DidReqMove();
+                }
+                return;
+            }
 
             // get values from avatar object (in format they would be sent)
             byte Speed = (byte)avatar.HorizontalSpeed;
@@ -1621,12 +1693,12 @@ namespace Meridian59.Client
             ushort Angle = avatar.AngleUnits;
 
             // abort if not moved by at least 1 kod fine unit or for other reasons
-            if ((X == lastSentPositionX && Y == lastSentPositionY) ||
+            if (!ForceSend && ((X == lastSentPositionX && Y == lastSentPositionY) ||
                 CurrentRoom == null ||
                 Data.Effects.Paralyze.IsActive ||
                 Data.IsResting ||
                 Data.IsWaiting ||
-                Speed == 0)
+                Speed == 0))
                 return;
 
             // see if we recently sent a 'go' (teleport) and might be in process of a teleport
@@ -1634,7 +1706,7 @@ namespace Meridian59.Client
                 (Real)ServerConnection.RTT * (Real)1.1, (Real)100.0, (Real)500.0);
 
             // don't try to move then because it would rubberband (interpreted as teleport back)
-            if (GameTick.Current < expectedGoResultTime)
+            if (!ForceSend && GameTick.Current < expectedGoResultTime)
                 return;
 
             // lookup the sector this new kod position would mean on the server
@@ -1923,11 +1995,13 @@ namespace Meridian59.Client
                         for (int i = 0; i < targetIDs.Length; i++)
                             plainIDs[i] = new ObjectID(targetIDs[i].ID);
 
+#if !VANILLA && !OPENMERIDIAN
                         // create message instance
                         ReqPerformMessage message = new ReqPerformMessage(Skill.ID, plainIDs);
 
                         // send/enqueue it (async)
                         ServerConnection.SendQueue.Enqueue(message);
+#endif
 
                         // save tick we last sent an update
                         GameTick.DidReqAttack();
@@ -2811,52 +2885,6 @@ namespace Meridian59.Client
             RequestInfoAfterLogin();
         }
 
-
-        public virtual void macroHandler()
-        { 
-            if (macronext == 0) 
-            { 
-                macronext = DateTimeOffset.Now.ToUnixTimeMilliseconds(); 
-            }
-            if (inputMacroQueue.Count > 0)
-            {
-                // we can't be sure we'll get a tick precisely when our macro is due
-                // this is fuzzy "past the finish line" check that will trigger once each interval
-                if (ztime > macronext)
-                {
-                    String macrostr = (string)inputMacroQueue.Dequeue();
-                    // Default delay between actions 1/4 second 
-                    // this should probably be the floor for any sleep, and based off the
-                    // server flood detection interval.
-                    macronext = ztime + 250;
-                    String[] loopstring = macrostr.Split(new[]{" "}, StringSplitOptions.RemoveEmptyEntries);
-                    if ("loop" == loopstring[0])
-                    {
-                        // on the first instance of loop in a command
-                        // we restart the macro
-                        macrolast = "macro "+ macrolast;
-                        ExecChatCommand(macrolast);
-                        return;
-                    }
-                    else
-                    {
-                        if (macrostr.Contains(" "))
-                        {
-                            String[] mcstrings = macrostr.Split(new[]{" "}, StringSplitOptions.RemoveEmptyEntries);
-                            if ("sleep" == mcstrings[0])
-                            {
-                                long sleep = long.Parse(mcstrings[1]);
-                                macronext += sleep;
-                                // sleep instead of executing and return to mainloop
-                                return;
-                            }
-                        }
-                        ExecChatCommand(macrostr);
-                    } 
-                }
-            }
-        }
-
         /// <summary>
         /// Tries to move your avatar in the given 2D direction on the ground.
         /// Call this method each gametick (=threadloop) you want to process a movement.
@@ -3085,40 +3113,6 @@ namespace Meridian59.Client
                     case ChatCommandType.Say:
                         ChatCommandSay chatCommandSay = (ChatCommandSay)chatCommand;
                         SendSayToMessage(ChatTransmissionType.Normal, chatCommandSay.Text);
-                        break;
-
-                    case ChatCommandType.Macro:
-                        ChatCommandMacro chatCommandMacro = (ChatCommandMacro)chatCommand;
-                        // verify the queue is empty, otherwise ignore the command
-                        // or break out of loop
-                        if (inputMacroQueue.Count > 0)
-                        {
-                            // macro stop should halt any execution
-                            if (chatCommandMacro.Text == "stop") 
-                            {
-                                // just incase we somehow race this
-                                macrolast = "";
-                                // dump the queue and we should halt all execution
-                                inputMacroQueue.Clear();
-                                break;
-                            }
-                            break;
-                        }
-                        else
-                        {
-                            macrolast = chatCommandMacro.Text;
-                            String[] macrostrlist = chatCommandMacro.Text.Split(';');
-                            foreach (String s in macrostrlist)
-                            {
-                                inputMacroQueue.Enqueue(s);
-                                // if the string we just enqueued is loop, break out of the input loop
-                                // no point in processing commands we won't use
-                                if (s == "loop") 
-                                {
-                                    break;
-                                }
-                            }
-                        }
                         break;
 
                     case ChatCommandType.Emote:

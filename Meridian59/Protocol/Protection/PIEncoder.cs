@@ -15,6 +15,7 @@
 */
 
 using Meridian59.Common;
+using Meridian59.Common.Enums;
 using System.Text;
 
 namespace Meridian59.Protocol
@@ -129,15 +130,35 @@ namespace Meridian59.Protocol
         }
 
         /// <summary>
-        /// Update the PIDecoder from values attached to PingReply message
+        /// Update the PIEncoder from values attached to PingReply message
         /// </summary>
-        public void Update()
+        /// <param name="NewEncodeByte">Is attached on PingReply</param>
+        /// <param name="ResourceID">Is attached on PingReply</param>
+        public void Update(byte NewEncodeByte, uint ResourceID)
         {
             // Set new EncodeByte
-            CurrentEncodeByte = SeedByte ^ XORValue;
+            CurrentEncodeByte = (byte)(NewEncodeByte ^ XORValue);
 
-            // Update the local iteration string
-            hashString = Util.Encoding.GetBytes(StaticFallbackHashString);
+            // zero resourceid indicates use of fallbackstring
+            if (ResourceID == 0)
+                hashString = Util.Encoding.GetBytes(StaticFallbackHashString);
+
+            else
+            {
+                string iterateString;
+
+                // try to get the string from dictionary (ALWAYS english!)
+                if (stringResources.TryGetValue(ResourceID, out iterateString, LanguageCode.English))
+                {
+                    hashString = Util.Encoding.GetBytes(iterateString);
+                }
+                else
+                {
+                    // THIS MOST LIKELY KILLS YOUR CONNECTION
+                    // AND SHOULD NOT BE REACHED
+                    hashString = Util.Encoding.GetBytes(StaticFallbackHashString);
+                }
+            }
 
             // Reset the cursor on the local iteration string
             cursor = 0;

@@ -166,7 +166,7 @@ namespace Meridian59.Protocol.GameMessages
         }
 
         public MoveMessage(byte[] Buffer, int StartIndex = 0) 
-            : base (Buffer, StartIndex = 0) { }
+            : base (Buffer, StartIndex) { }
 
         public unsafe MoveMessage(ref byte* Buffer)
             : base(ref Buffer) { }

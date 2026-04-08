@@ -64,7 +64,9 @@ namespace Meridian59.Data.Models
         { 
             get {
                 int len = base.ByteLength + TypeSizes.INT + TypeSizes.INT + flags.ByteLength;
-
+#if VANILLA
+                len += TypeSizes.INT; // namecolor field sent by OpenMeridian after flags
+#endif
                 len += lightingInfo.ByteLength;
 
                 if (firstAnimationType > 0)
@@ -103,7 +105,9 @@ namespace Meridian59.Data.Models
 
             flags.ReadFrom(Buffer, cursor);                                    // Flags (n bytes)
             cursor += flags.ByteLength;
-
+#if VANILLA
+            cursor += TypeSizes.INT; // namecolor field sent by OpenMeridian after flags
+#endif
             lightingInfo.ReadFrom(Buffer, cursor); // Lighting info (n bytes)
             cursor += lightingInfo.ByteLength;
 
@@ -268,7 +272,9 @@ namespace Meridian59.Data.Models
             Buffer += TypeSizes.INT;
 
             flags.ReadFrom(ref Buffer);
-
+#if VANILLA
+            Buffer += TypeSizes.INT; // namecolor field sent by OpenMeridian after flags
+#endif
             lightingInfo.ReadFrom(ref Buffer);
 
             if ((AnimationType)Buffer[0] == AnimationType.TRANSLATION)

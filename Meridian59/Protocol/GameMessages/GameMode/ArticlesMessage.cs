@@ -148,7 +148,7 @@ namespace Meridian59.Protocol.GameMessages
         }
 
         public ArticlesMessage(byte[] Buffer, int StartIndex = 0)
-            : base(Buffer, StartIndex = 0) { }
+            : base(Buffer, StartIndex) { }
 
         public unsafe ArticlesMessage(ref byte* Buffer)
             : base(ref Buffer) { }

@@ -105,7 +105,7 @@ namespace Meridian59.Data.Models
             angle = MathUtil.BinaryAngleToRadian(BitConverter.ToUInt16(Buffer, cursor));
             cursor += TypeSizes.SHORT;
 
-            if ((AnimationType)Buffer[cursor] == AnimationType.TRANSLATION)                   // check if there is a colortranslation or effect as 1. anim     
+            if ((AnimationType)Buffer[cursor] == AnimationType.TRANSLATION)                   // check if there is a colortranslation or effect as 1. anim
             {
                 motionFirstAnimationType = (AnimationType)Buffer[cursor];
                 cursor++;
@@ -326,6 +326,7 @@ namespace Meridian59.Data.Models
 
                 return val;
             }
+            set { position3D.Z = value; }
         }
        
         /// <summary>
@@ -343,6 +344,7 @@ namespace Meridian59.Data.Models
 
                 return val;
             }
+            set { position3D.X = value; }
         }
         
         /// <summary>

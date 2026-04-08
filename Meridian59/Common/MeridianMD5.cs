@@ -27,11 +27,6 @@ namespace Meridian59.Common
     public static class MeridianMD5
     {
         /// <summary>
-        /// MD5 creator from .NET
-        /// </summary>
-        private static readonly MD5 md5 = MD5.Create();
-
-        /// <summary>
         /// Generates a MD5 in M59 style from bytes input
         /// </summary>
         /// <param name="Input">Bytes to generate a M59 MD5 from</param>
@@ -39,7 +34,11 @@ namespace Meridian59.Common
         public static byte[] ComputeMD5(byte[] Input)
         {
             // get MD5
-            byte[] bytes = md5.ComputeHash(Input);
+            byte[] bytes;
+            using (MD5 md5 = MD5.Create())
+            {
+                bytes = md5.ComputeHash(Input);
+            }
 
             // replace zero bytes with 0x01 to work around misinterpreting
             // them as termination zeros
@@ -58,9 +57,10 @@ namespace Meridian59.Common
         public static byte[] ComputeGenericMD5(byte[] Input)
         {
             // get MD5
-            byte[] bytes = md5.ComputeHash(Input);
-
-            return bytes;
+            using (MD5 md5 = MD5.Create())
+            {
+                return md5.ComputeHash(Input);
+            }
         }
 
         /// <summary>
@@ -87,17 +87,12 @@ namespace Meridian59.Common
             if (!File.Exists(FilePath))
                 return new byte[16];
 
-            // create filestream
-            FileStream fs = new FileStream(FilePath, FileMode.Open, FileAccess.Read);
-
             // compute and compare md5
-            byte[] md5Fil = md5.ComputeHash(fs);
-
-            // close filestream
-            fs.Close();
-            fs.Dispose();
-
-            return md5Fil;
+            using (FileStream fs = new FileStream(FilePath, FileMode.Open, FileAccess.Read))
+            using (MD5 md5 = MD5.Create())
+            {
+                return md5.ComputeHash(fs);
+            }
         }
     }
 }

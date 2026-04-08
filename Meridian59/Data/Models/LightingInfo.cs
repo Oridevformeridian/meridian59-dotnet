@@ -60,7 +60,7 @@ namespace Meridian59.Data.Models
 
             if (IsLightOn)
             {
-                Array.Copy(BitConverter.GetBytes(Convert.ToByte(lightIntensity)), 0, Buffer, cursor, TypeSizes.BYTE); // Intensity (1 byte).
+                Buffer[cursor] = Convert.ToByte(lightIntensity); // Intensity (1 byte).
                 cursor += TypeSizes.BYTE;
 
                 Array.Copy(BitConverter.GetBytes(Convert.ToUInt16(lightColor)), 0, Buffer, cursor, TypeSizes.SHORT); // Color (2 bytes).

@@ -32,7 +32,14 @@ namespace Meridian59.Common
         /// <summary>
         /// Default binary string encoding used in Meridian 59 (codepage 1252).
         /// </summary>
-        public static readonly Encoding Encoding = Encoding.GetEncoding(1252);
+        public static readonly Encoding Encoding;
+
+        static Util()
+        {
+            // register codepages provider for 1252 support on .NET Core / Linux
+            System.Text.Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+            Encoding = System.Text.Encoding.GetEncoding(1252);
+        }
 
         /// <summary>
         /// Executes a maximum Garbage Collection

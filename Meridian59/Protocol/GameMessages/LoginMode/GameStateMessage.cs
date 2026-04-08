@@ -31,6 +31,6 @@ namespace Meridian59.Protocol.GameMessages
             : base(MessageTypeLoginMode.Game) { }
 
         public GameStateMessage(byte[] Buffer, int StartIndex = 0)
-            : base(Buffer, StartIndex = 0) { }
+            : base(Buffer, StartIndex) { }
     }
 }

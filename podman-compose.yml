@@ -1,0 +1,31 @@
+version: '3'
+services:
+  ircbot:
+    build:
+      context: .
+      dockerfile: Dockerfile.bots
+    image: meridian59-bots:latest
+    command: mono /app/Meridian59.Bot.IRC/bin/x64/Release/Meridian59.Bot.IRC.exe
+    volumes:
+      - ./Resources:/app/Resources:ro
+      - ./Meridian59.Bot.IRC/configuration.xml:/app/Meridian59.Bot.IRC/bin/x64/Release/configuration.xml
+    environment:
+      - TERM=xterm
+
+  shopbot:
+    image: meridian59-bots:latest
+    command: mono /app/Meridian59.Bot.Shop/bin/x64/Release/Meridian59.Bot.Shop.exe
+    volumes:
+      - ./Resources:/app/Resources:ro
+      - ./Meridian59.Bot.Shop/configuration.shopbot.xml:/app/Meridian59.Bot.Shop/bin/x64/Release/configuration.shopbot.xml
+    environment:
+      - TERM=xterm
+
+  spellbot:
+    image: meridian59-bots:latest
+    command: mono /app/Meridian59.Bot.Spell/bin/x64/Release/Meridian59.Bot.Spell.exe
+    volumes:
+      - ./Resources:/app/Resources:ro
+      - ./Meridian59.Bot.Spell/configuration.spellbot.xml:/app/Meridian59.Bot.Spell/bin/x64/Release/configuration.spellbot.xml
+    environment:
+      - TERM=xterm

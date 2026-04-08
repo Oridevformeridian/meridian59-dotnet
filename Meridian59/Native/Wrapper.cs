@@ -39,24 +39,19 @@ namespace Meridian59.Native
         {
             Marshal.Copy(Source, Destination, 0, Length);
         }
-// optimized for windows
-#if WINCLR
-        public static void CopyMem(IntPtr Source, IntPtr Destination, uint Length)
-        {
-            Windows.Kernel32.RtlMoveMemory(Destination, Source, Length); 
-        }
-// optimized for linux
-#if MONO
-        public static void CopyMem(IntPtr Source, IntPtr Destination, uint Length)
-        {
-            Linux.Libc.memcpy(Destination, Source, Length); 
-        }
-#endif
-// managed implementation / any CLR
-#else
-        
 
-        // ptr to ptr copy missing here, no fast managed variant
+        public static void CopyMem(IntPtr Source, IntPtr Destination, uint Length)
+        {
+#if WINCLR
+            Windows.Kernel32.RtlMoveMemory(Destination, Source, Length); 
+#elif MONO
+            Linux.Libc.memcpy(Destination, Source, Length); 
+#else
+            // Fallback for other CLRs: no fast direct IntPtr to IntPtr copy in standard managed code
+            // We could use a loop with Marshal.ReadByte/WriteByte but that's slow.
+            // For now, let's assume we are either on Windows or Mono.
+            throw new NotImplementedException("CopyMem(IntPtr, IntPtr, uint) not implemented for this CLR.");
 #endif
+        }
     }
 }

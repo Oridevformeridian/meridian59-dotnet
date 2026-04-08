@@ -14,6 +14,8 @@
  If not, see http://www.gnu.org/licenses/.
 */
 
+#if !VANILLA && !OPENMERIDIAN
+
 using System;
 using Meridian59.Common.Enums;
 using Meridian59.Common.Constants;
@@ -78,3 +80,4 @@ namespace Meridian59.Data.Models
         }
     }
 }
+#endif

@@ -66,14 +66,19 @@ namespace Meridian59.Data.Models
         #endregion
       
         #region IByteSerializable
-        public override int ByteLength { 
-            get { 
+        public override int ByteLength {
+            get {
                 int len = base.ByteLength + TypeSizes.INT + TypeSizes.INT + flags.ByteLength;
 
                 if (HasLight)
                     len += lightingInfo.ByteLength;
-               
-                if (firstAnimationType > 0)                
+
+#if VANILLA
+                // OpenMeridian sends a 4-byte namecolor after flags, before lightingInfo.
+                len += TypeSizes.INT;
+#endif
+
+                if (firstAnimationType > 0)
                     len += TypeSizes.BYTE + TypeSizes.BYTE;
 
                 len += animation.ByteLength;
@@ -82,8 +87,8 @@ namespace Meridian59.Data.Models
                 foreach (SubOverlay subOverlay in subOverlays)
                     len += subOverlay.ByteLength;
 
-                return len; 
-            } 
+                return len;
+            }
         }
 
         public override int ReadFrom(byte[] Buffer, int StartIndex = 0)
@@ -91,7 +96,7 @@ namespace Meridian59.Data.Models
             int cursor = StartIndex;
 
             cursor += base.ReadFrom(Buffer, StartIndex);
-            
+
             overlayFileRID = BitConverter.ToUInt32(Buffer, cursor);
             cursor += TypeSizes.INT;
 
@@ -100,6 +105,11 @@ namespace Meridian59.Data.Models
 
             flags.ReadFrom(Buffer, cursor);
             cursor += flags.ByteLength;
+
+#if VANILLA
+            // OpenMeridian sends a 4-byte namecolor after flags, before lightingInfo.
+            cursor += TypeSizes.INT;
+#endif
 
             if (HasLight)
             {
@@ -128,6 +138,16 @@ namespace Meridian59.Data.Models
                 colorTranslation = ColorTransformation.FILTERWHITE90;
 
             animation = Animation.ExtractAnimation(Buffer, cursor);
+            if (animation == null)
+            {
+                int dumpStart = Math.Max(0, StartIndex);
+                int dumpEnd   = Math.Min(Buffer.Length - 1, cursor + 12);
+                var sb = new System.Text.StringBuilder();
+                sb.Append($"ExtractAnimation null: StartIndex={StartIndex} cursor={cursor} byte=0x{Buffer[cursor]:X2} | ");
+                for (int _i = dumpStart; _i <= dumpEnd; _i++)
+                    sb.Append($"[{_i}]=0x{Buffer[_i]:X2} ");
+                throw new Exception(sb.ToString());
+            }
             animation.PropertyChanged += OnAnimationPropertyChanged;
             cursor += animation.ByteLength;
 
@@ -204,6 +224,11 @@ namespace Meridian59.Data.Models
             Buffer += TypeSizes.INT;
 
             flags.ReadFrom(ref Buffer);
+
+#if VANILLA
+            // OpenMeridian sends a 4-byte namecolor after flags, before lightingInfo.
+            Buffer += TypeSizes.INT;
+#endif
 
             if (HasLight)
                 lightingInfo.ReadFrom(ref Buffer);

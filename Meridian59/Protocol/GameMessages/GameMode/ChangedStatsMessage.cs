@@ -73,7 +73,7 @@ namespace Meridian59.Protocol.GameMessages
         }
 
         public ChangedStatsMessage(byte[] Buffer, int StartIndex = 0) 
-            : base (Buffer, StartIndex = 0) { }      
+            : base (Buffer, StartIndex) { }      
     }
 }
 #endif

@@ -50,8 +50,7 @@ namespace Meridian59 { namespace Ogre
 
       // create scenenode
       SceneNode = Parent->createChildSceneNode(ostr_name2);
-      if (!Entity->isAttached())
-        SceneNode->attachObject(Entity);
+      SceneNode->attachObject(Entity);
 
       SceneNode->setPosition(*AttachedHotspot->Position);
       SceneNode->setOrientation(*info->Orientation);
@@ -97,8 +96,7 @@ namespace Meridian59 { namespace Ogre
             particleSystem->getTechnique(j)->position = *info->Position;
 
          // attach particlesystem to parent scenenode
-         if (!particleSystem->isAttached())
-           SceneNode->attachObject(particleSystem);
+         SceneNode->attachObject(particleSystem);
 
          // start particles
          particleSystem->start();

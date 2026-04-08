@@ -29,6 +29,6 @@ namespace Meridian59.Protocol.GameMessages
             : base(MessageTypeGameMode.PasswordNotOK) { }
 
         public PasswordNotOKMessage(byte[] Buffer, int StartIndex = 0)
-            : base(Buffer, StartIndex = 0) { }
+            : base(Buffer, StartIndex) { }
     }
 }

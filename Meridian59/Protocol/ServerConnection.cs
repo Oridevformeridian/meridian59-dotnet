@@ -198,9 +198,11 @@ namespace Meridian59.Protocol
         /// True if the client is using UDP for some transmissions.
         /// </summary>
         public bool UseUdp { get { return useUdp; } }
+
+        public event Action<string, string> OnLog;
         #endregion
 
-        #region Constructor/Destructor
+        #region Constructors
         /// <summary>
         /// Constructor.
         /// </summary>
@@ -226,6 +228,7 @@ namespace Meridian59.Protocol
             messageController.ServerSaveChanged += new ServerSaveChangedEventHandler(OnMessageControllerNewServerSave);
             messageController.HandlerError += new HandlerErrorEventHandler(OnMessageControllerHandlerError);
             messageController.ProtocolModeChanged += new EventHandler(OnMessageControllerProtocolModeChanged);
+            messageController.OnLog += (type, text) => { if (OnLog != null) OnLog(type, text); };
             
             // setup the ping timer
             timPing = new System.Timers.Timer();
@@ -251,6 +254,15 @@ namespace Meridian59.Protocol
         #endregion
 
         #region Methods
+        /// <summary>
+        /// Update sequence number, serversave and add CRC
+        /// </summary>
+        /// <param name="Message"></param>
+        public void SignMessage(GameMessage Message)
+        {
+            messageController.SignMessage(Message);
+        }
+
         /// <summary>
         /// Connect this instance to a Meridian 59 Server.
         /// This will spawn the internal workthread and also

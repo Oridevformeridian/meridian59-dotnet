@@ -1,0 +1,42 @@
+# Build Stage
+FROM mono:latest AS build
+
+WORKDIR /app
+
+# Copy the entire source
+COPY . .
+
+# 1. Build IrcDotNet dependency
+WORKDIR /app/Tools/ircdotnet/source/IrcDotNet
+RUN msbuild /p:Configuration=Release /p:TargetFramework=net461
+
+# 2. Copy the built IrcDotNet.dll to where the Bot project expects it
+RUN mkdir -p /app/Meridian59.Bot.IRC/lib
+RUN cp bin/Release/net461/IrcDotNet.dll /app/Meridian59.Bot.IRC/lib/
+
+# 3. Build the core Meridian59.csproj
+WORKDIR /app
+RUN msbuild /p:Configuration=Release /p:Platform=x64 /p:DefineConstants="TRACE;MONO;DRAWING;CONCURRENT;X64" Meridian59/Meridian59.csproj
+
+# 4. Build the bots
+RUN msbuild /p:Configuration=Release /p:Platform=x64 /p:DefineConstants="TRACE;MONO;DRAWING;CONCURRENT;X64" Meridian59.Bot.IRC/Meridian59.Bot.IRC.csproj
+RUN msbuild /p:Configuration=Release /p:Platform=x64 /p:DefineConstants="TRACE;MONO;DRAWING;CONCURRENT;X64" Meridian59.Bot.Shop/Meridian59.Bot.Shop.csproj
+RUN msbuild /p:Configuration=Release /p:Platform=x64 /p:DefineConstants="TRACE;MONO;DRAWING;CONCURRENT;X64" Meridian59.Bot.Spell/Meridian59.Bot.Spell.csproj
+
+# Runtime Stage
+FROM mono:slim
+
+WORKDIR /app
+
+# Create the same directory structure as in development to keep relative paths working.
+# Configs often use ../../../../Resources/
+
+# Copy the built binaries from the build stage
+COPY --from=build /app/Meridian59.Bot.IRC/bin/x64/Release/ /app/Meridian59.Bot.IRC/bin/x64/Release/
+COPY --from=build /app/Meridian59.Bot.Shop/bin/x64/Release/ /app/Meridian59.Bot.Shop/bin/x64/Release/
+COPY --from=build /app/Meridian59.Bot.Spell/bin/x64/Release/ /app/Meridian59.Bot.Spell/bin/x64/Release/
+
+# We will mount ./Resources to /app/Resources
+
+# Default command
+CMD ["mono", "/app/Meridian59.Bot.IRC/bin/x64/Release/Meridian59.Bot.IRC.exe"]

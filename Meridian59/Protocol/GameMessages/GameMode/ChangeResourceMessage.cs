@@ -117,7 +117,7 @@ namespace Meridian59.Protocol.GameMessages
         }
 
         public ChangeResourceMessage(byte[] Buffer, int StartIndex = 0) 
-            : base (Buffer, StartIndex = 0) { }
+            : base (Buffer, StartIndex) { }
 
         public unsafe ChangeResourceMessage(ref byte* Buffer)
             : base(ref Buffer) { }  

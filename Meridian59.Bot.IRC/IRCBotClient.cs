@@ -321,7 +321,8 @@ namespace Meridian59.Bot.IRC
         /// <param name="PartnerID"></param>
         /// <param name="Words">First element is command name</param>
         protected override void ProcessCommand(uint PartnerID, string[] Words)
-        {         
+        {
+            base.ProcessCommand(PartnerID, Words);
         }
         
         /// <summary>

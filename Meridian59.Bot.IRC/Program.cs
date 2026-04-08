@@ -48,6 +48,7 @@ namespace Meridian59.Bot.IRC
             }
 
             // run as windows service
+#if WINCLR
             else
             {
                 // set workpath to .exe path (not default for services)
@@ -62,6 +63,7 @@ namespace Meridian59.Bot.IRC
                 // run service
                 ServiceBase.Run(serviceWrap);
             }
+#endif
         }
     }
 }

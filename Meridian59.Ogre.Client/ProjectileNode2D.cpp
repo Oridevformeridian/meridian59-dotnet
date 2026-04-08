@@ -21,15 +21,9 @@ namespace Meridian59 { namespace Ogre
       ::Ogre::String& ostr_id        = ::Ogre::StringConverter::toString(Projectile->ID);
       ::Ogre::String& ostr_billboard = PREFIX_PROJECTILE2D_BILLBOARD + ostr_id;
       ::Ogre::String& ostr_node      = PREFIX_PROJECTILE2D_SCENENODE + ostr_id;
-      if (sceneManager->hasBillboardSet(ostr_billboard))
-      {
-	 billboardSet=sceneManager->getBillboardSet(ostr_billboard);
-      }
-      else
-      {
+
       // create billboardset for 1 billboard
       billboardSet = sceneManager->createBillboardSet(ostr_billboard, 1);
-      
       billboardSet->setBillboardOrigin(BillboardOrigin::BBO_BOTTOM_CENTER);
       billboardSet->setBillboardType(BillboardType::BBT_POINT);
       billboardSet->setAutoextend(false);
@@ -42,11 +36,10 @@ namespace Meridian59 { namespace Ogre
       // create billboard to draw image on
       billboard = billboardSet->createBillboard(::Ogre::Vector3::ZERO);
       billboard->setColour(ColourValue::ZERO);
-      }
+
       // create scenenode
       SceneNode = sceneManager->getRootSceneNode()->createChildSceneNode(ostr_node);
-      if (!billboardSet->isAttached())
-        SceneNode->attachObject(billboardSet);
+      SceneNode->attachObject(billboardSet);
 #if DEBUG
       SceneNode->showBoundingBox(true);
 #endif
@@ -148,8 +141,7 @@ namespace Meridian59 { namespace Ogre
       {
          // maximum distance we render this light or skip it
          Light->setRenderingDistance(RemoteNode::MAXLIGHTRENDERDISTANCE);
-         if (!Light->isAttached())
-           SceneNode->attachObject(Light);
+         SceneNode->attachObject(Light);
          Light->setPosition(::Ogre::Vector3(0, 100, 0));
       }
    };
