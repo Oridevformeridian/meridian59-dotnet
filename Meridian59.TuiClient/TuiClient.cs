@@ -57,6 +57,7 @@ namespace Meridian59.TuiClient
         private DateTime gameModeSince = DateTime.MinValue;
 
         // Script execution
+        public bool NoAutoexec { get; set; } = false;
         private Queue<string> scriptQueue = null;
         private DateTime scriptNextAt = DateTime.MinValue;
         private bool scriptTriggered = false;
@@ -123,7 +124,7 @@ namespace Meridian59.TuiClient
                 !string.IsNullOrEmpty(Data.RoomInformation?.RoomName))
             {
                 scriptTriggered = true;
-                LoadAutoexec();
+                if (!NoAutoexec) LoadAutoexec();
                 scriptNextAt = DateTime.Now.AddMilliseconds(500);
             }
             TickScript();
@@ -747,8 +748,8 @@ namespace Meridian59.TuiClient
                 case ConsoleKey.D: Move( 1,  0,    0); break;
 
                 case ConsoleKey.Spacebar:
-                    SendReqGo(false);
                     SendReqActivate();
+                    SendReqGo(true);
                     break;
 
                 case ConsoleKey.R:
@@ -897,17 +898,19 @@ namespace Meridian59.TuiClient
                             }
                         }
 
-                        // 2. Check for "passable" walls that aren't portals (transitions)
+                        // 2. Check for passable walls (exits) or portal walls (doors between sectors)
                         if (!atBoundary)
                         {
                             var pos2D = new Meridian59.Common.V2(avatar.CoordinateX * 16f - 1024f, avatar.CoordinateY * 16f - 1024f);
                             foreach (var wall in CurrentRoom.Walls)
                             {
                                 bool isPortal = wall.LeftSectorNum != 0 && wall.RightSectorNum != 0;
-                                bool isPassable = (wall.LeftSide != null && wall.LeftSide.Flags.IsPassable) || 
+                                bool isPassable = (wall.LeftSide != null && wall.LeftSide.Flags.IsPassable) ||
                                                   (wall.RightSide != null && wall.RightSide.Flags.IsPassable);
-                                
-                                if (!isPortal && isPassable)
+
+                                // Room exits: non-portal passable walls
+                                // Door exits: portal walls (passable or not — player may need to open them)
+                                if (!isPortal && isPassable || isPortal)
                                 {
                                     int uc;
                                     var p1 = wall.P1;

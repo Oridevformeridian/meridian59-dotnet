@@ -10,10 +10,18 @@ namespace Meridian59.TuiClient
         {
             Console.Title = "Meridian 59 TUI Client";
 
+            bool noAutoexec = false;
+            foreach (var arg in args)
+            {
+                if (arg.Equals("--no-autoexec", StringComparison.OrdinalIgnoreCase))
+                    noAutoexec = true;
+            }
+
             try
             {
                 using (var client = new TuiClient())
                 {
+                    client.NoAutoexec = noAutoexec;
                     client.IsService = false;
                     client.Start(false);
 
