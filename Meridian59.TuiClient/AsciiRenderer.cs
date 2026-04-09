@@ -149,9 +149,9 @@ namespace Meridian59.TuiClient
                 foreach (var wall in roo.Walls)
                 {
                     int x0 = (int)Math.Round((wall.P1.X - centerX) / rooToGrid) + width / 2;
-                    int y0 = (int)Math.Round((wall.P1.Y - centerY) / rooToGrid) + height / 2;
+                    int y0 = -(int)Math.Round((wall.P1.Y - centerY) / rooToGrid) + height / 2;
                     int x1 = (int)Math.Round((wall.P2.X - centerX) / rooToGrid) + width / 2;
-                    int y1 = (int)Math.Round((wall.P2.Y - centerY) / rooToGrid) + height / 2;
+                    int y1 = -(int)Math.Round((wall.P2.Y - centerY) / rooToGrid) + height / 2;
 
                     char symbol = '#';
                     bool isPortal = wall.LeftSectorNum != 0 && wall.RightSectorNum != 0;
@@ -179,9 +179,9 @@ namespace Meridian59.TuiClient
                 {
                     var box = roo.GetBoundingBox2DFromThings();
                     int bx0 = (int)Math.Round((box.Min.X - centerX) / rooToGrid) + width / 2;
-                    int by0 = (int)Math.Round((box.Min.Y - centerY) / rooToGrid) + height / 2;
+                    int by0 = -(int)Math.Round((box.Min.Y - centerY) / rooToGrid) + height / 2;
                     int bx1 = (int)Math.Round((box.Max.X - centerX) / rooToGrid) + width / 2;
-                    int by1 = (int)Math.Round((box.Max.Y - centerY) / rooToGrid) + height / 2;
+                    int by1 = -(int)Math.Round((box.Max.Y - centerY) / rooToGrid) + height / 2;
 
                     // Draw boundary box with 'B' at corners
                     nextBuffer.Set(bx0, by0, 'B');
@@ -199,7 +199,7 @@ namespace Meridian59.TuiClient
                     float objRooX = obj.CoordinateX * 16f - 1024f;
                     float objRooY = obj.CoordinateY * 16f - 1024f;
                     int relX = (int)Math.Round((objRooX - centerX) / rooToGrid) + width / 2;
-                    int relY = (int)Math.Round((objRooY - centerY) / rooToGrid) + height / 2;
+                    int relY = -(int)Math.Round((objRooY - centerY) / rooToGrid) + height / 2;
 
                     if (relX >= 0 && relX < width && relY >= 1 && relY < height)
                         nextBuffer.Set(relX, relY, GetCharForObject(obj));
