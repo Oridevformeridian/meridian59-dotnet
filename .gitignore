@@ -46,6 +46,8 @@
 /Meridian59.RsbEditor/obj
 /Meridian59.Patcher/bin
 /Meridian59.Patcher/obj
+/Meridian59.TuiClient/bin
+/Meridian59.TuiClient/obj
 
 # Excludings in Resources
 /Resources/bgfobjects/*.bgf
@@ -55,3 +57,4 @@
 # Others
 /Meridian59.BgfService/Bin
 /Meridian59.Brain
+PLAN.md
