@@ -634,8 +634,8 @@ namespace Meridian59.TuiClient
             if (text.StartsWith("move ", StringComparison.OrdinalIgnoreCase))
             {
                 string dir = text.Substring(5).Trim().ToLower();
-                if (dir == "n" || dir == "north") Move( 0, -1, 3072);
-                else if (dir == "s" || dir == "south") Move( 0,  1, 1024);
+                if (dir == "n" || dir == "north") Move( 0,  1, 3072);
+                else if (dir == "s" || dir == "south") Move( 0, -1, 1024);
                 else if (dir == "e" || dir == "east") Move( 1,  0,    0);
                 else if (dir == "w" || dir == "west") Move(-1,  0, 2048);
                 else Log("SYS", $"Unknown direction: {dir}");
@@ -735,14 +735,14 @@ namespace Meridian59.TuiClient
                     break;
 
                 // Arrow key movement
-                case ConsoleKey.UpArrow:    Move( 0, -1, 3072); break;
-                case ConsoleKey.DownArrow:  Move( 0,  1, 1024); break;
+                case ConsoleKey.UpArrow:    Move( 0,  1, 3072); break;
+                case ConsoleKey.DownArrow:  Move( 0, -1, 1024); break;
                 case ConsoleKey.LeftArrow:  Move(-1,  0, 2048); break;
                 case ConsoleKey.RightArrow: Move( 1,  0,    0); break;
 
                 // WASD also moves
-                case ConsoleKey.W: Move( 0, -1, 3072); break;
-                case ConsoleKey.S: Move( 0,  1, 1024); break;
+                case ConsoleKey.W: Move( 0,  1, 3072); break;
+                case ConsoleKey.S: Move( 0, -1, 1024); break;
                 case ConsoleKey.A: Move(-1,  0, 2048); break;
                 case ConsoleKey.D: Move( 1,  0,    0); break;
 
