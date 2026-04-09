@@ -814,9 +814,12 @@ namespace Meridian59.TuiClient
             var avatar = Data.AvatarObject;
             if (avatar == null) return;
 
-            // Update angle immediately
-            avatar.AngleUnits = angle;
-            SendReqTurnMessage(true);
+            // Only send a turn if the facing angle actually changed
+            if (avatar.AngleUnits != angle)
+            {
+                avatar.AngleUnits = angle;
+                SendReqTurnMessage(true);
+            }
 
             if (isNoClip)
             {
@@ -866,7 +869,13 @@ namespace Meridian59.TuiClient
                     }
                 }
 
-                if (!movedAtAll)
+                if (movedAtAll)
+                {
+                    // Immediately inform the server of the new position rather than waiting
+                    // for the base-class periodic send, which would leave timing gaps.
+                    SendReqMoveMessage(true);
+                }
+                else
                 {
                     // Check if we are at a room boundary or transition wall
                     bool atBoundary = false;
