@@ -814,6 +814,10 @@ namespace Meridian59.TuiClient
             var avatar = Data.AvatarObject;
             if (avatar == null) return;
 
+            // dy is screen-space (positive = north on display due to Y-flip).
+            // World-space Y is the opposite: positive = south.
+            int worldDy = -dy;
+
             // Update angle immediately
             avatar.AngleUnits = angle;
             SendReqTurnMessage(true);
@@ -824,7 +828,7 @@ namespace Meridian59.TuiClient
                 ushort origX = avatar.CoordinateX;
                 ushort origY = avatar.CoordinateY;
                 ushort newX = (ushort)Math.Clamp((int)origX + dx * 16, 0, 65535);
-                ushort newY = (ushort)Math.Clamp((int)origY + dy * 16, 0, 65535);
+                ushort newY = (ushort)Math.Clamp((int)origY + worldDy * 16, 0, 65535);
                 avatar.CoordinateX = newX;
                 avatar.CoordinateY = newY;
                 byte origSpeed = (byte)avatar.HorizontalSpeed;
@@ -836,7 +840,7 @@ namespace Meridian59.TuiClient
             }
             else
             {
-                var direction = new Meridian59.Common.V2(dx, dy);
+                var direction = new Meridian59.Common.V2(dx, worldDy);
                 if (direction.LengthSquared > 0.001f)
                     direction.Normalize();
 
@@ -925,7 +929,7 @@ namespace Meridian59.TuiClient
                         ushort origX = avatar.CoordinateX;
                         ushort origY = avatar.CoordinateY;
                         avatar.CoordinateX = (ushort)Math.Clamp((int)origX + dx * 2, 0, 65535);
-                        avatar.CoordinateY = (ushort)Math.Clamp((int)origY + dy * 2, 0, 65535);
+                        avatar.CoordinateY = (ushort)Math.Clamp((int)origY + worldDy * 2, 0, 65535);
                         byte os = (byte)avatar.HorizontalSpeed;
                         avatar.HorizontalSpeed = 16;
                         SendReqMoveMessage(true);
