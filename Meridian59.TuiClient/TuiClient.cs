@@ -614,6 +614,14 @@ namespace Meridian59.TuiClient
                 return;
             }
 
+            // go
+            if (text.Equals("go", StringComparison.OrdinalIgnoreCase))
+            {
+                SendReqGo(false);
+                Log("SYS", "Requested room transition (Go).");
+                return;
+            }
+
             // noclip
             if (text.Equals("noclip", StringComparison.OrdinalIgnoreCase))
             {
@@ -739,6 +747,7 @@ namespace Meridian59.TuiClient
                 case ConsoleKey.D: Move( 1,  0,    0); break;
 
                 case ConsoleKey.Spacebar:
+                    SendReqGo(false);
                     SendReqActivate();
                     break;
 
@@ -805,8 +814,6 @@ namespace Meridian59.TuiClient
             var avatar = Data.AvatarObject;
             if (avatar == null) return;
 
-            Log("SYS", $"Moving: dir={dx},{dy} angle={angle} (Noclip={isNoClip})");
-
             // Update angle immediately
             avatar.AngleUnits = angle;
             SendReqTurnMessage(true);
@@ -861,19 +868,72 @@ namespace Meridian59.TuiClient
 
                 if (!movedAtAll)
                 {
-                    // If blocked at start, try a "boundary push"
-                    // Move 2 units without collision check to trigger room transition
-                    ushort origX = avatar.CoordinateX;
-                    ushort origY = avatar.CoordinateY;
-                    avatar.CoordinateX = (ushort)Math.Clamp((int)origX + dx * 2, 0, 65535);
-                    avatar.CoordinateY = (ushort)Math.Clamp((int)origY + dy * 2, 0, 65535);
-                    byte os = (byte)avatar.HorizontalSpeed;
-                    avatar.HorizontalSpeed = 16;
-                    SendReqMoveMessage(true);
-                    avatar.CoordinateX = origX;
-                    avatar.CoordinateY = origY;
-                    avatar.HorizontalSpeed = os;
-                    Log("SYS", "Attempting boundary snap...");
+                    // Check if we are at a room boundary or transition wall
+                    bool atBoundary = false;
+                    bool transitionWall = false;
+
+                    if (CurrentRoom != null)
+                    {
+                        // 1. Check physical room boundaries
+                        if (CurrentRoom.Things.Count >= 2)
+                        {
+                            var box = CurrentRoom.GetBoundingBox2DFromThings();
+                            float rooX = avatar.CoordinateX * 16f - 1024f;
+                            float rooY = avatar.CoordinateY * 16f - 1024f;
+                            float margin = 32.0f;
+                            if (rooX < box.Min.X + margin || rooX > box.Max.X - margin ||
+                                rooY < box.Min.Y + margin || rooY > box.Max.Y - margin)
+                            {
+                                atBoundary = true;
+                            }
+                        }
+
+                        // 2. Check for "passable" walls that aren't portals (transitions)
+                        if (!atBoundary)
+                        {
+                            var pos2D = new Meridian59.Common.V2(avatar.CoordinateX * 16f - 1024f, avatar.CoordinateY * 16f - 1024f);
+                            foreach (var wall in CurrentRoom.Walls)
+                            {
+                                bool isPortal = wall.LeftSectorNum != 0 && wall.RightSectorNum != 0;
+                                bool isPassable = (wall.LeftSide != null && wall.LeftSide.Flags.IsPassable) || 
+                                                  (wall.RightSide != null && wall.RightSide.Flags.IsPassable);
+                                
+                                if (!isPortal && isPassable)
+                                {
+                                    int uc;
+                                    var p1 = wall.P1;
+                                    var p2 = wall.P2;
+                                    double dist2 = (double)pos2D.MinSquaredDistanceToLineSegment(ref p1, ref p2, out uc);
+                                    if (dist2 < 4096.0) // 64^2 = 4096 (4 world units)
+                                    {
+                                        transitionWall = true;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if (atBoundary || transitionWall)
+                    {
+                        Log("SYS", $"At {(atBoundary ? "boundary" : "transition wall")}. Triggering 'Go'...");
+                        SendReqGo(false);
+                    }
+                    else
+                    {
+                        // Not at boundary, just a regular wall. Try a small push to maybe slide.
+                        ushort origX = avatar.CoordinateX;
+                        ushort origY = avatar.CoordinateY;
+                        avatar.CoordinateX = (ushort)Math.Clamp((int)origX + dx * 2, 0, 65535);
+                        avatar.CoordinateY = (ushort)Math.Clamp((int)origY + dy * 2, 0, 65535);
+                        byte os = (byte)avatar.HorizontalSpeed;
+                        avatar.HorizontalSpeed = 16;
+                        SendReqMoveMessage(true);
+                        avatar.CoordinateX = origX;
+                        avatar.CoordinateY = origY;
+                        avatar.HorizontalSpeed = os;
+                        Log("SYS", "Wall collision. (Try 'noclip' if stuck)");
+                    }
                 }
 
                 Log("DEBUG", $"Move Result: Pos=({avatar.CoordinateX},{avatar.CoordinateY})");

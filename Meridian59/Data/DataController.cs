@@ -1115,11 +1115,15 @@ namespace Meridian59.Data
 
             // update inventoryobjects
             for (int i = InventoryObjects.Count - 1; i >= 0; i--)
+            {
+                if (i >= InventoryObjects.Count) continue;
                 InventoryObjects[i].Tick(Tick, Span);
+            }
 
             // update projectiles
             for (int i = Projectiles.Count - 1; i >= 0; i--)
             {
+                if (i >= Projectiles.Count) continue;
                 Projectiles[i].Tick(Tick, Span);
 
                 if (RoomInformation.ResourceRoom != null)
@@ -1129,6 +1133,7 @@ namespace Meridian59.Data
             // update roomobjects
             for (int i = RoomObjects.Count - 1; i >= 0; i--)
             {
+                if (i >= RoomObjects.Count) continue;
                 RoomObjects[i].Tick(Tick, Span);
                 RoomObjects[i].UpdatePosition(Span, RoomInformation);
             }

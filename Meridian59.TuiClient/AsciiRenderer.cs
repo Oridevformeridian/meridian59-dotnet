@@ -154,17 +154,40 @@ namespace Meridian59.TuiClient
                     int y1 = (int)Math.Round((wall.P2.Y - centerY) / rooToGrid) + height / 2;
 
                     char symbol = '#';
-                    if (wall.LeftSectorNum != 0 && wall.RightSectorNum != 0)
+                    bool isPortal = wall.LeftSectorNum != 0 && wall.RightSectorNum != 0;
+                    bool isPassable = (wall.LeftSide != null && wall.LeftSide.Flags.IsPassable) || 
+                                      (wall.RightSide != null && wall.RightSide.Flags.IsPassable);
+
+                    if (isPortal)
                     {
                         symbol = '.'; // Portal
-                        // Check if it's a door (animated or passable flag might change)
-                        if (wall.LeftSide?.Flags.IsPassable == false || wall.RightSide?.Flags.IsPassable == false)
+                        if (!isPassable)
                             symbol = 'D'; // Closed door
                         else if (wall.LeftSide?.Flags.IsHasAnimated == true || wall.RightSide?.Flags.IsHasAnimated == true)
                             symbol = 'd'; // Open/Animated door
                     }
+                    else if (isPassable)
+                    {
+                        symbol = 'X'; // Exit / Boundary Transition
+                    }
                     
                     DrawLine(nextBuffer, x0, y0, x1, y1, symbol);
+                }
+
+                // Draw room boundaries from Things[0] and Things[1]
+                if (roo.Things.Count >= 2)
+                {
+                    var box = roo.GetBoundingBox2DFromThings();
+                    int bx0 = (int)Math.Round((box.Min.X - centerX) / rooToGrid) + width / 2;
+                    int by0 = (int)Math.Round((box.Min.Y - centerY) / rooToGrid) + height / 2;
+                    int bx1 = (int)Math.Round((box.Max.X - centerX) / rooToGrid) + width / 2;
+                    int by1 = (int)Math.Round((box.Max.Y - centerY) / rooToGrid) + height / 2;
+
+                    // Draw boundary box with 'B' at corners
+                    nextBuffer.Set(bx0, by0, 'B');
+                    nextBuffer.Set(bx1, by0, 'B');
+                    nextBuffer.Set(bx0, by1, 'B');
+                    nextBuffer.Set(bx1, by1, 'B');
                 }
             }
 
