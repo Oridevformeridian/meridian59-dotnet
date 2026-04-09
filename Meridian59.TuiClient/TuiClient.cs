@@ -898,7 +898,7 @@ namespace Meridian59.TuiClient
                             }
                         }
 
-                        // 2. Check for passable walls (exits) or portal walls (doors between sectors)
+                        // 2. Check for room exit walls (non-portal passable = boundary leading outside)
                         if (!atBoundary)
                         {
                             var pos2D = new Meridian59.Common.V2(avatar.CoordinateX * 16f - 1024f, avatar.CoordinateY * 16f - 1024f);
@@ -908,9 +908,10 @@ namespace Meridian59.TuiClient
                                 bool isPassable = (wall.LeftSide != null && wall.LeftSide.Flags.IsPassable) ||
                                                   (wall.RightSide != null && wall.RightSide.Flags.IsPassable);
 
-                                // Room exits: non-portal passable walls
-                                // Door exits: portal walls (passable or not — player may need to open them)
-                                if (!isPortal && isPassable || isPortal)
+                                // Only match true room exits — non-portal passable walls.
+                                // Portal walls are internal sector boundaries; treating them as
+                                // transitions would bypass the slide code for most walls in the room.
+                                if (!isPortal && isPassable)
                                 {
                                     int uc;
                                     var p1 = wall.P1;
