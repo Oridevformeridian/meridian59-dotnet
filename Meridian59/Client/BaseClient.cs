@@ -492,24 +492,32 @@ namespace Meridian59.Client
                 case MessageTypeGameMode.Look:                              // 207
                 case MessageTypeGameMode.LookSpell:                         // 191
                 case MessageTypeGameMode.LookSkill:                         // 192
-                case MessageTypeGameMode.AddBgOverlay:                      // 153
-                case MessageTypeGameMode.ChangeBgOverlay:                   // 154
-                case MessageTypeGameMode.RemoveBgOverlay:                   // 157
-                case MessageTypeGameMode.RemoveEnchantment:                 // 148
-                case MessageTypeGameMode.ChangeTexture:                     // 208
-                case MessageTypeGameMode.ChangeResource:                    // 209
-                case MessageTypeGameMode.Offer:                             // 158
-                case MessageTypeGameMode.CounterOffer:                      // 159
-                case MessageTypeGameMode.Create:                            // 160
-                case MessageTypeGameMode.Remove:                            // 161
-                case MessageTypeGameMode.Action:                            // 163
-                case MessageTypeGameMode.Background:                        // 131
-                case MessageTypeGameMode.Articles:                          // 133
-                case MessageTypeGameMode.SectorMove:                        // 223
+                case MessageTypeGameMode.AddBgOverlay:
+                case MessageTypeGameMode.ChangeBgOverlay:
+                case MessageTypeGameMode.RemoveBgOverlay:
+                case MessageTypeGameMode.RemoveEnchantment:
+                case MessageTypeGameMode.ChangeResource:
+                case MessageTypeGameMode.Offer:
+                case MessageTypeGameMode.CounterOffer:
+                case MessageTypeGameMode.Create:
+                case MessageTypeGameMode.Remove:
+                case MessageTypeGameMode.Action:
+                case MessageTypeGameMode.Background:
+                case MessageTypeGameMode.Articles:
+                case MessageTypeGameMode.SectorMove:
+                case MessageTypeGameMode.SectorLight:
+                case MessageTypeGameMode.WallAnimate:
+                case MessageTypeGameMode.SectorAnimate:
+                case MessageTypeGameMode.ChangeTexture:
+                case MessageTypeGameMode.WallScroll:
+                case MessageTypeGameMode.SectorScroll:
+                case MessageTypeGameMode.SetView:
+                case MessageTypeGameMode.ResetView:
+                case MessageTypeGameMode.ReqGetFromContainer:
                     Data.HandleGameModeMessage(Message);
                     break;
 
-                case MessageTypeGameMode.InvalidateData:                    // 228
+                case MessageTypeGameMode.InvalidateData:
                     HandleInvalidateDataMessage((InvalidateDataMessage)Message);
                     break;
             }
