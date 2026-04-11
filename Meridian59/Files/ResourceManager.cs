@@ -212,7 +212,6 @@ namespace Meridian59.Files
                 {
                     // load it
                     rsbFile = new RsbFile(StringsFolder + "/" + File);
-
                     // update the registry                 
                     StringDictionaries.TryUpdate(File, rsbFile, null);
                 }

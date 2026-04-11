@@ -113,10 +113,13 @@ namespace Meridian59.Common
 		/// <returns>False if not found in language AND fallback language</returns>
 		public bool TryGetValue(uint ResourceID, out string Value)
 		{
-			if (!TryGetValue(ResourceID, out Value, Language) && Language != FALLBACKLANGUAGE)
+			if (TryGetValue(ResourceID, out Value, Language))
+				return true;
+
+			if (Language != FALLBACKLANGUAGE)
 				return TryGetValue(ResourceID, out Value, FALLBACKLANGUAGE);
 
-			return true;
+			return false;
 		}
 
 		/// <summary>

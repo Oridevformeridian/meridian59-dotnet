@@ -48,4 +48,5 @@ def find_string_id(filename, target_string):
 
 if __name__ == "__main__":
     rsb_file = sys.argv[1] if len(sys.argv) > 1 else 'Resources/strings/rsc0000-git.rsb'
-    find_string_id(rsb_file, "char.dll")
+    target = sys.argv[2] if len(sys.argv) > 2 else "char.dll"
+    find_string_id(rsb_file, target)
