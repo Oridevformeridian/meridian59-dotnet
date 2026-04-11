@@ -205,7 +205,7 @@ namespace Meridian59.Files
             RsbFile rsbFile = null;
 
             // if the file is known
-            if (StringDictionaries.TryGetValue(File, out rsbFile))
+            if (stringDictionaries.TryGetValue(File, out rsbFile))
             {
                 // haven't loaded it yet?
                 if (rsbFile == null)
@@ -213,7 +213,7 @@ namespace Meridian59.Files
                     // load it
                     rsbFile = new RsbFile(StringsFolder + "/" + File);
                     // update the registry                 
-                    StringDictionaries.TryUpdate(File, rsbFile, null);
+                    stringDictionaries[File] = rsbFile;
                 }
             }
 
@@ -643,14 +643,12 @@ namespace Meridian59.Files
                 Logger.Log(MODULENAME, LogType.Info, "DEBUG: Loaded string dictionary " + RsbFile + " (v" + file.Version + ") with " + file.StringResources.Count + " strings.");
                 foreach (RsbResourceID res in file.StringResources)
                 {
-                    if (res.ID == 20055)
-                        Logger.Log(MODULENAME, LogType.Info, "DEBUG: Found resource 20055: " + res.Text);
-                    StringResources.TryAdd(res.ID, res.Text, res.Language);
+                    stringResources.TryAdd(res.ID, res.Text, res.Language);
                 }
             }
             else
             {
-                Logger.Log(MODULENAME, LogType.Info, "DEBUG: FAILED to load string dictionary: " + RsbFile);
+                Logger.Log(MODULENAME, LogType.Error, "CRITICAL: Could not load string dictionary: " + RsbFile);
             }
 
             // raise event
