@@ -357,10 +357,18 @@ namespace Meridian59.Data.Models
             }
         }
 
-        #region IByteSerializable
         public override int ByteLength
         {
-            get { return base.ByteLength + TypeSizes.BYTE + TypeSizes.INT + TypeSizes.INT + TypeSizes.BYTE + TypeSizes.BYTE; }
+            get
+            {
+                int len = base.ByteLength;
+#if OPENMERIDIAN
+                len += TypeSizes.INT; // namecolor
+#elif !VANILLA
+                len += TypeSizes.BYTE + TypeSizes.INT + TypeSizes.INT + TypeSizes.BYTE + TypeSizes.BYTE;
+#endif
+                return len;
+            }
         }
 
         public override int ReadFrom(byte[] Buffer, int StartIndex = 0)
@@ -369,6 +377,10 @@ namespace Meridian59.Data.Models
 
             cursor += base.ReadFrom(Buffer, StartIndex);
 
+#if OPENMERIDIAN
+            namecolor = BitConverter.ToUInt32(Buffer, cursor);
+            cursor += TypeSizes.INT;
+#elif !VANILLA
             drawing = (DrawingType)Buffer[cursor];
             cursor++;
 
@@ -383,6 +395,7 @@ namespace Meridian59.Data.Models
 
             moveon = (MoveOnType)Buffer[cursor];
             cursor++;
+#endif
 
             return cursor - StartIndex;
         }
@@ -391,6 +404,10 @@ namespace Meridian59.Data.Models
         {
             base.ReadFrom(ref Buffer);
 
+#if OPENMERIDIAN
+            namecolor = *((uint*)Buffer);
+            Buffer += TypeSizes.INT;
+#elif !VANILLA
             drawing = (DrawingType)Buffer[0];
             Buffer++;
 
@@ -405,6 +422,7 @@ namespace Meridian59.Data.Models
 
             moveon = (MoveOnType)Buffer[0];
             Buffer++;
+#endif
         }
 
         public override int WriteTo(byte[] Buffer, int StartIndex = 0)
@@ -413,6 +431,10 @@ namespace Meridian59.Data.Models
 
             cursor += base.WriteTo(Buffer, StartIndex);
 
+#if OPENMERIDIAN
+            Array.Copy(BitConverter.GetBytes(namecolor), 0, Buffer, cursor, TypeSizes.INT);
+            cursor += TypeSizes.INT;
+#elif !VANILLA
             Buffer[cursor] = (byte)drawing;
             cursor++;
 
@@ -427,6 +449,7 @@ namespace Meridian59.Data.Models
 
             Buffer[cursor] = (byte)moveon;
             cursor++;
+#endif
 
             return cursor - StartIndex;
         }
@@ -435,6 +458,10 @@ namespace Meridian59.Data.Models
         {
             base.WriteTo(ref Buffer);
 
+#if OPENMERIDIAN
+            *((uint*)Buffer) = namecolor;
+            Buffer += TypeSizes.INT;
+#elif !VANILLA
             Buffer[0] = (byte)drawing;
             Buffer++;
 
@@ -449,6 +476,7 @@ namespace Meridian59.Data.Models
 
             Buffer[0] = (byte)moveon;
             Buffer++;
+#endif
         }
         #endregion
 
@@ -1095,12 +1123,17 @@ namespace Meridian59.Data.Models
         public bool IsSubset(ObjectFlags Flags)
         {
             return (Flags == null || (
-                (flags & Flags.Value) == Flags.Value &&
-                (drawing & Flags.Drawing) == Flags.Drawing &&
+                (flags & Flags.Value) == Flags.Value
+#if OPENMERIDIAN
+                && (namecolor & Flags.NameColor) == Flags.NameColor
+#endif
+#if !VANILLA && !OPENMERIDIAN
+                && (drawing & Flags.Drawing) == Flags.Drawing &&
                 (minimap & Flags.Minimap) == Flags.Minimap &&
-                (namecolor & Flags.NameColor) == Flags.NameColor &&
                 (player & Flags.Player) == Flags.Player &&
-                (moveon & Flags.MoveOn) == Flags.MoveOn));
+                (moveon & Flags.MoveOn) == Flags.MoveOn
+#endif
+                ));
         }
 
         /// <summary>

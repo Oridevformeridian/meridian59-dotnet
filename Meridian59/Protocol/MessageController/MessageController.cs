@@ -385,7 +385,7 @@ namespace Meridian59.Protocol
                     case MessageTypeGameMode.System:                                          // PI: 6
                         TypedMessage = new SystemMessage(e.MessageBuffer);
                         break;
-#if !VANILLA && !OPENMERIDIAN
+#if !VANILLA
                     case MessageTypeGameMode.UdpPing:                                         // PI: 7
                         TypedMessage = new UdpPingMessage(e.MessageBuffer);
                         break;
@@ -490,7 +490,7 @@ namespace Meridian59.Protocol
                         TypedMessage = new EffectMessage(e.MessageBuffer);
                         break;
 
-#if !VANILLA && !OPENMERIDIAN
+#if !VANILLA
                     case MessageTypeGameMode.MovementSpeedPercent:                            // PI: 71
                         TypedMessage = new MovementSpeedPercentMessage(e.MessageBuffer);
                         break;
@@ -643,7 +643,7 @@ namespace Meridian59.Protocol
                     case MessageTypeGameMode.ReqInventoryMove:                                // PI: 127
                         TypedMessage = new ReqInventoryMoveMessage(e.MessageBuffer);
                         break;
-#if !OPENMERIDIAN
+#if !VANILLA
                     case MessageTypeGameMode.RoomContentsFlags:                               // PI: 128
                         TypedMessage = new RoomContentsFlagsMessage(e.MessageBuffer);
                         break;

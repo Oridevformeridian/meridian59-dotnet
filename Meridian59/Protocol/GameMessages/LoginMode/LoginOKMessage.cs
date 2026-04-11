@@ -32,8 +32,12 @@ namespace Meridian59.Protocol.GameMessages
         {
             get
             {
-#if !VANILLA && !OPENMERIDIAN
-                return base.ByteLength + TypeSizes.BYTE + TypeSizes.INT;
+#if !VANILLA
+                return base.ByteLength + TypeSizes.INT
+#if !OPENMERIDIAN
+                    + TypeSizes.INT
+#endif
+                    ;
 #else
                 return base.ByteLength + TypeSizes.BYTE;
 #endif
@@ -46,12 +50,16 @@ namespace Meridian59.Protocol.GameMessages
 
             cursor += base.WriteTo(Buffer, StartIndex);
 
-            Buffer[cursor] = (byte)AccountType;
-            cursor++;
-
-#if !VANILLA && !OPENMERIDIAN
+#if !VANILLA
+            Array.Copy(BitConverter.GetBytes((int)AccountType), 0, Buffer, cursor, TypeSizes.INT);
+            cursor += TypeSizes.INT;
+#if !OPENMERIDIAN
             Array.Copy(BitConverter.GetBytes(SessionID), 0, Buffer, cursor, TypeSizes.INT);
             cursor += TypeSizes.INT;
+#endif
+#else
+            Buffer[cursor] = (byte)AccountType;
+            cursor++;
 #endif
             return cursor - StartIndex;
         }
@@ -62,12 +70,16 @@ namespace Meridian59.Protocol.GameMessages
 
             cursor += base.ReadFrom(Buffer, StartIndex);
 
-            AccountType = (AccountType)Buffer[cursor];
-            cursor++;
-
-#if !VANILLA && !OPENMERIDIAN
+#if !VANILLA
+            AccountType = (AccountType)BitConverter.ToInt32(Buffer, cursor);
+            cursor += TypeSizes.INT;
+#if !OPENMERIDIAN
             SessionID = BitConverter.ToInt32(Buffer, cursor);
             cursor += TypeSizes.INT;
+#endif
+#else
+            AccountType = (AccountType)Buffer[cursor];
+            cursor++;
 #endif
             return cursor - StartIndex;
         }

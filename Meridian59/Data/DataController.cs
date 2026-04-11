@@ -1785,7 +1785,7 @@ namespace Meridian59.Data
         #region Logging
         public void LogOutgoingPacket(GameMessage Message)
         {
-#if !VANILLA && !OPENMERIDIAN
+#if !VANILLA
             bool isPing = 
                (MessageTypeGameMode)Message.PI == MessageTypeGameMode.Ping || 
                (MessageTypeGameMode)Message.PI == MessageTypeGameMode.UdpPing;
@@ -1798,7 +1798,7 @@ namespace Meridian59.Data
 
         public void LogIncomingGameModeMessage(GameMessage Message)
         {
-#if !VANILLA && !OPENMERIDIAN
+#if !VANILLA
             bool isPing = 
                (MessageTypeGameMode)Message.PI == MessageTypeGameMode.EchoPing || 
                (MessageTypeGameMode)Message.PI == MessageTypeGameMode.EchoUdpPing;
@@ -1861,7 +1861,7 @@ namespace Meridian59.Data
                     HandleEffect((EffectMessage)Message);
                     break;
 
-#if !VANILLA && !OPENMERIDIAN
+#if !VANILLA
                 case MessageTypeGameMode.MovementSpeedPercent:      // 71
                     HandleMovementSpeedPercent((MovementSpeedPercentMessage)Message);
                     break;
@@ -2149,7 +2149,7 @@ namespace Meridian59.Data
             HandleCharInfoMessage(Message);
         }
 
-#if !VANILLA && !OPENMERIDIAN
+#if !VANILLA
         protected virtual void HandleRoomContentsFlags(RoomContentsFlagsMessage Message)
         {
             if (RoomObjects == null)
@@ -2350,7 +2350,7 @@ namespace Meridian59.Data
                     inventoryObject.NextUpdate = Message.UpdatedObject;
             }
         }
-#if !VANILLA && !OPENMERIDIAN
+#if !VANILLA
         protected virtual void HandleMovementSpeedPercent(MovementSpeedPercentMessage Message)
         {
             MovementSpeedPercent = Message.MovementSpeedPercent;
@@ -2361,7 +2361,7 @@ namespace Meridian59.Data
             RoomObject roomObject = RoomObjects.GetItemByID(Message.ObjectID);
             if (roomObject != null)
             {
-#if !VANILLA && !OPENMERIDIAN
+#if !VANILLA
                 // set new angle from message
                 roomObject.AngleUnits = Message.Angle;
 #endif
@@ -2904,7 +2904,7 @@ namespace Meridian59.Data
                     {
                         oldSkillEntry.UpdateFromModel(newSkillEntry, true);
                     }
-#if !VANILLA && !OPENMERIDIAN
+#if !VANILLA
                     else
                     {
                         // New skill, insert.
@@ -2922,7 +2922,7 @@ namespace Meridian59.Data
                     {
                         oldSkillEntry.UpdateFromModel(newSkillEntry, true);
                     }
-#if !VANILLA && !OPENMERIDIAN
+#if !VANILLA
                     else
                     {
                         // New skill, insert.
@@ -3022,15 +3022,9 @@ namespace Meridian59.Data
                     GuildInfo.IsVisible = true;
                     break;
 #if !VANILLA
-                case UserCommandType.ReceivePreferences:
-                    ClientPreferences.UpdateFromModel(((UserCommandReceivePreferences)Message.Command).ClientPreferences, true);
-                    ClientPreferences.Enabled = true;
-                    break;
-#if !OPENMERIDIAN
                 case UserCommandType.GuildShieldError:
                     GuildShieldInfo.GuildShieldError = ((UserCommandGuildShieldError)Message.Command).ShieldError;
                     break;
-#endif
 #endif
                 case UserCommandType.GuildShield:
                     // this can either be GuildShieldInfo or GuildshieldInfoReq
@@ -3040,6 +3034,7 @@ namespace Meridian59.Data
                     }                  
                     break;
 
+#if !VANILLA
                 case UserCommandType.GuildAsk:
                     GuildAskData.UpdateFromModel(((UserCommandGuildAsk)Message.Command).Data, true);
                     GuildAskData.IsVisible = true;
@@ -3062,6 +3057,7 @@ namespace Meridian59.Data
                     GuildHallsInfo.UpdateFromModel(((UserCommandGuildHalls)Message.Command).GuildHallsInfo, true);
                     GuildHallsInfo.IsVisible = true;
                     break;
+#endif
             }
         }
 

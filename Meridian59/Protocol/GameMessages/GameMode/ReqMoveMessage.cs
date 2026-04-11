@@ -29,7 +29,7 @@ namespace Meridian59.Protocol.GameMessages
         {
             get
             {
-#if !VANILLA && !OPENMERIDIAN
+#if !VANILLA
                 return base.ByteLength + TypeSizes.SHORT + TypeSizes.SHORT + TypeSizes.BYTE + TypeSizes.INT + TypeSizes.SHORT;
 #else
                 return base.ByteLength + TypeSizes.SHORT + TypeSizes.SHORT + TypeSizes.BYTE + TypeSizes.INT;
@@ -55,7 +55,7 @@ namespace Meridian59.Protocol.GameMessages
             Array.Copy(BitConverter.GetBytes(CurrentMapID), 0, Buffer, cursor, TypeSizes.INT);
             cursor += TypeSizes.INT;
 
-#if !VANILLA && !OPENMERIDIAN
+#if !VANILLA
             Array.Copy(BitConverter.GetBytes(Angle), 0, Buffer, cursor, TypeSizes.SHORT);
             cursor += TypeSizes.SHORT;
 #endif
@@ -80,7 +80,7 @@ namespace Meridian59.Protocol.GameMessages
             CurrentMapID = BitConverter.ToUInt32(Buffer, cursor);
             cursor += TypeSizes.INT;
 
-#if !VANILLA && !OPENMERIDIAN
+#if !VANILLA
             Angle = BitConverter.ToUInt16(Buffer, cursor);
             cursor += TypeSizes.SHORT;
 #endif

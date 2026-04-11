@@ -140,6 +140,11 @@ namespace Meridian59.Data.Models
                 case AnimationType.ONCE:
                     returnValue = new AnimationOnce(Buffer, StartIndex);
                     break;
+
+                default:
+                    // Robustness: default to none if parsing failed
+                    returnValue = new AnimationNone(1);
+                    break;
             }
 
             return returnValue;
@@ -167,6 +172,13 @@ namespace Meridian59.Data.Models
 
                 case AnimationType.ONCE:
                     returnValue = new AnimationOnce(ref Buffer);
+                    break;
+
+                default:
+                    // Robustness: default to none if parsing failed
+                    returnValue = new AnimationNone(1);
+                    // Standard AnimationNone is 3 bytes (type 1 + ushort 2)
+                    Buffer += 3;
                     break;
             }
 

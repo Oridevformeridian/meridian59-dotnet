@@ -32,7 +32,7 @@ namespace Meridian59.Protocol.GameMessages
         {
             get
             {
-#if VANILLA || OPENMERIDIAN
+#if VANILLA
                 return base.ByteLength;
 #else
                 return base.ByteLength + TypeSizes.BYTE;
@@ -45,7 +45,7 @@ namespace Meridian59.Protocol.GameMessages
             int cursor = StartIndex;
 
             cursor += base.WriteTo(Buffer, StartIndex);
-#if !VANILLA && !OPENMERIDIAN
+#if !VANILLA
             Buffer[cursor] = (byte)CharInfoNotOkError;
             cursor++;
 #endif
@@ -57,7 +57,7 @@ namespace Meridian59.Protocol.GameMessages
             int cursor = StartIndex;
 
             cursor += base.ReadFrom(Buffer, StartIndex);
-#if VANILLA || OPENMERIDIAN
+#if VANILLA
             CharInfoNotOkError = CharInfoNotOkError.NameInUse;
 #else
             CharInfoNotOkError = (CharInfoNotOkError)Buffer[cursor];

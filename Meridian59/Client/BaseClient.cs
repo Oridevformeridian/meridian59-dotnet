@@ -674,8 +674,8 @@ namespace Meridian59.Client
             // update the num to our local next one
             Message.Mail.Num = ResourceManager.Mails.GetMaximumNum() + 1;
 
-#if !VANILLA && !OPENMERIDIAN
-            // already unix timestamps in MeridianNext protocol
+#if !VANILLA
+            // already unix timestamps in MeridianNext/OpenMeridian protocol
             Message.Mail.IsTimestampUpdated = true;
 #endif
             // add it to our list (will trigger a save to disk)
@@ -1632,7 +1632,7 @@ namespace Meridian59.Client
         /// <param name="Forced">True ignores the delay checker</param>
         public virtual void SendReqTurnMessage(ushort Angle, uint ID, bool Forced = false)
         {
-#if !VANILLA && !OPENMERIDIAN
+#if !VANILLA
             if (Forced || (GameTick.CanReqTurn() && GameTick.CanReqMove()))
 #else
             if (Forced || GameTick.CanReqTurn())
@@ -2003,7 +2003,7 @@ namespace Meridian59.Client
                         for (int i = 0; i < targetIDs.Length; i++)
                             plainIDs[i] = new ObjectID(targetIDs[i].ID);
 
-#if !VANILLA && !OPENMERIDIAN
+#if !VANILLA
                         // create message instance
                         ReqPerformMessage message = new ReqPerformMessage(Skill.ID, plainIDs);
 

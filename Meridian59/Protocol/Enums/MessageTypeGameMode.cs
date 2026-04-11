@@ -28,7 +28,7 @@ namespace Meridian59.Protocol.Enums
         RoundTrip1          = 4,
         RoundTrip2          = 5,
         System              = 6,
-#if !VANILLA && !OPENMERIDIAN
+#if !VANILLA
         UdpPing             = 7,
         EchoUdpPing         = 8,
 #endif
@@ -68,8 +68,8 @@ namespace Meridian59.Protocol.Enums
         ReqAdminQuest       = 62,
 
         Effect              = 70,
-#if !VANILLA && !OPENMERIDIAN
-        MovementSpeedPercent = 71,
+#if !VANILLA
+        MovementSpeedPercent= 71,
 #endif
         Mail                = 80,
         ReqGetMail          = 81,
@@ -118,10 +118,8 @@ namespace Meridian59.Protocol.Enums
         ChangeDescription   = 126,
 #if !VANILLA
         ReqInventoryMove    = 127,
-#if !OPENMERIDIAN
         RoomContentsFlags   = 128,
         ChangeObjectFlags   = 129,
-#endif
 #endif
         Player              = 130,
         Stat                = 131,

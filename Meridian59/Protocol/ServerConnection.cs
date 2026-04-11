@@ -237,7 +237,7 @@ namespace Meridian59.Protocol
             timPing.Elapsed += new ElapsedEventHandler(OnPingTimerElapsed);
 
             // enable UDP for 105/112 by default, keep disabled for others
-#if !VANILLA && !OPENMERIDIAN
+#if !VANILLA
             useUdp = true;
 #else
             useUdp = false;
@@ -323,7 +323,7 @@ namespace Meridian59.Protocol
             if (isQuitting)
                 return;
 
-#if !VANILLA && !OPENMERIDIAN
+#if !VANILLA
             // true for UDP pings which should always be sent through UDP regardless 'useUdp'
             bool isUdpPing = 
                Message is GameModeMessage && 
@@ -540,7 +540,7 @@ namespace Meridian59.Protocol
                 SendQueue.Enqueue(new PingMessage());
 
                 // also send udp ping for 105/112
-#if !VANILLA && !OPENMERIDIAN
+#if !VANILLA
                 SendQueue.Enqueue(new UdpPingMessage());
 #endif
                 // save time ping was sent
@@ -656,7 +656,7 @@ namespace Meridian59.Protocol
             {
                 case MessageTypeGameMode.EchoPing:
                     rtt = (int)(DateTime.Now - lastPingSent).TotalMilliseconds;
-#if !VANILLA && !OPENMERIDIAN
+#if !VANILLA
                     // use this as trigger to see if UDP pings timed out
                     double msSinceUdpEcho = (DateTime.Now - lastEchoUdpRecv).TotalMilliseconds;
                     if (useUdp && msSinceUdpEcho > UDPTIMEOUT)
@@ -686,7 +686,7 @@ namespace Meridian59.Protocol
                     isQuitting = false;
                     break;
 
-#if !VANILLA && !OPENMERIDIAN
+#if !VANILLA
                 case MessageTypeGameMode.EchoUdpPing:
                     if (!useUdp)
                         Logger.Log(MODULENAME, LogType.Info, "Enabling UDP again after failed state.");

@@ -73,7 +73,7 @@ namespace Meridian59.Data.Models
                 if (HasLight)
                     len += lightingInfo.ByteLength;
 
-#if VANILLA
+#if OPENMERIDIAN
                 // OpenMeridian sends a 4-byte namecolor after flags, before lightingInfo.
                 len += TypeSizes.INT;
 #endif
@@ -106,7 +106,7 @@ namespace Meridian59.Data.Models
             flags.ReadFrom(Buffer, cursor);
             cursor += flags.ByteLength;
 
-#if VANILLA
+#if OPENMERIDIAN
             // OpenMeridian sends a 4-byte namecolor after flags, before lightingInfo.
             cursor += TypeSizes.INT;
 #endif
@@ -138,18 +138,8 @@ namespace Meridian59.Data.Models
                 colorTranslation = ColorTransformation.FILTERWHITE90;
 
             animation = Animation.ExtractAnimation(Buffer, cursor);
-            if (animation == null)
-            {
-                // Robustness: default to none if parsing failed
-                animation = new AnimationNone(1);
-                // Standard AnimationNone is 3 bytes (type 1 + ushort 2)
-                cursor += 3;
-            }
-            else
-            {
-                animation.PropertyChanged += OnAnimationPropertyChanged;
-                cursor += animation.ByteLength;
-            }
+            animation.PropertyChanged += OnAnimationPropertyChanged;
+            cursor += animation.ByteLength;
 
             byte subOverlaysCount = Buffer[cursor];
             cursor++;
@@ -225,7 +215,7 @@ namespace Meridian59.Data.Models
 
             flags.ReadFrom(ref Buffer);
 
-#if VANILLA
+#if OPENMERIDIAN
             // OpenMeridian sends a 4-byte namecolor after flags, before lightingInfo.
             Buffer += TypeSizes.INT;
 #endif

@@ -40,8 +40,8 @@ namespace Meridian59.Data.Models
         public override int ByteLength { 
             get {
                 return base.ByteLength
-#if !VANILLA && !OPENMERIDIAN
-                    + TypeSizes.BYTE + TypeSizes.BYTE + TypeSizes.BYTE
+#if !VANILLA
+                    + TypeSizes.BYTE + TypeSizes.BYTE
 #endif
                     ;
             }
@@ -52,14 +52,11 @@ namespace Meridian59.Data.Models
             int cursor = StartIndex;
 
             cursor += base.ReadFrom(Buffer, StartIndex);
-#if !VANILLA && !OPENMERIDIAN
+#if !VANILLA
             targetsCount = Buffer[cursor];
             cursor++;
 
             schoolType = (SchoolType)Buffer[cursor];
-            cursor++;
-
-            isActiveSkill = Convert.ToBoolean(Buffer[cursor]);
             cursor++;
 #endif
             return cursor - StartIndex;   
@@ -70,14 +67,11 @@ namespace Meridian59.Data.Models
             int cursor = StartIndex;
             
             cursor += base.WriteTo(Buffer, StartIndex);                                 // ID (4/8 bytes)
-#if !VANILLA && !OPENMERIDIAN
+#if !VANILLA
             Buffer[cursor] = targetsCount;
             cursor++;
 
             Buffer[cursor] = (byte)schoolType;
-            cursor++;
-
-            Buffer[cursor] = Convert.ToByte(isActiveSkill);
             cursor++;
 #endif
             return cursor - StartIndex;
@@ -86,14 +80,11 @@ namespace Meridian59.Data.Models
         public override unsafe void ReadFrom(ref byte* Buffer)
         {
             base.ReadFrom(ref Buffer);
-#if !VANILLA && !OPENMERIDIAN
+#if !VANILLA
             targetsCount = Buffer[0];
             Buffer++;
 
             schoolType = (SchoolType)Buffer[0];
-            Buffer++;
-
-            isActiveSkill = Convert.ToBoolean(Buffer[0]);
             Buffer++;
 #endif
         }
@@ -101,14 +92,11 @@ namespace Meridian59.Data.Models
         public override unsafe void WriteTo(ref byte* Buffer)
         {
             base.WriteTo(ref Buffer);
-#if !VANILLA && !OPENMERIDIAN
+#if !VANILLA
             Buffer[0] = targetsCount;
             Buffer++;
 
             Buffer[0] = (byte)schoolType;
-            Buffer++;
-
-            Buffer[0] = Convert.ToByte(isActiveSkill);
             Buffer++;
 #endif
         }

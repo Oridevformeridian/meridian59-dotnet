@@ -21,7 +21,7 @@ using Meridian59.Data.Models;
 
 namespace Meridian59.Protocol.GameMessages
 {
-#if !VANILLA && !OPENMERIDIAN
+#if !VANILLA
     [Serializable]
     public class RoomContentsFlagsMessage : GameModeMessage
     {        

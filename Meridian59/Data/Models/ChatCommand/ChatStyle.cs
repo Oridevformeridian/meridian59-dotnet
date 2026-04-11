@@ -186,7 +186,7 @@ namespace Meridian59.Data.Models
                 Character == STYLECURSIVE ||
                 Character == STYLEUNDERLINE ||
                 Character == STYLENORMAL
-#if VANILLA || OPENMERIDIAN
+#if VANILLA
                 )
 #else
                 ||

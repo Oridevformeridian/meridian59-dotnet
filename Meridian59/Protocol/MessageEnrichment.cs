@@ -357,6 +357,7 @@ namespace Meridian59.Protocol
             double tick = GameTick.GetUpdatedTick();
 
             RoomInfo roomInfo = Message.RoomInfo;
+            roomInfo.ResolveStrings(resourceManager.StringResources, false);
             roomInfo.ResolveResources(resourceManager, false);
             
             double span = GameTick.GetUpdatedTick() - tick;

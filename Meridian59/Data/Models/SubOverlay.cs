@@ -148,7 +148,7 @@ namespace Meridian59.Data.Models
 
             // extract animation
             this.animation = Animation.ExtractAnimation(Buffer, cursor);
-            animation.PropertyChanged += OnAnimationPropertyChanged;
+            this.animation.PropertyChanged += OnAnimationPropertyChanged;
             cursor += this.animation.ByteLength;
 
             return cursor - StartIndex;

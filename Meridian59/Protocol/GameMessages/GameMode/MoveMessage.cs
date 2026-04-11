@@ -36,7 +36,7 @@ namespace Meridian59.Protocol.GameMessages
         {
             get
             {
-#if !VANILLA && !OPENMERIDIAN
+#if !VANILLA
                 return base.ByteLength + TypeSizes.INT + TypeSizes.SHORT + TypeSizes.SHORT + TypeSizes.BYTE + TypeSizes.SHORT;
 #else
                 return base.ByteLength + TypeSizes.INT + TypeSizes.SHORT + TypeSizes.SHORT + TypeSizes.BYTE;
@@ -62,7 +62,7 @@ namespace Meridian59.Protocol.GameMessages
             Buffer[cursor] = (byte)(ROTATETODEST | (byte)MovementSpeed);
             cursor++;
 
-#if !VANILLA && !OPENMERIDIAN
+#if !VANILLA
             Array.Copy(BitConverter.GetBytes(Angle), 0, Buffer, cursor, TypeSizes.SHORT);
             cursor += TypeSizes.SHORT;
 #endif
@@ -88,7 +88,7 @@ namespace Meridian59.Protocol.GameMessages
             RotateToDestination = ((Buffer[cursor] & ROTATETODEST) == ROTATETODEST);
             cursor++;
 
-#if !VANILLA && !OPENMERIDIAN
+#if !VANILLA
             Angle = BitConverter.ToUInt16(Buffer, cursor);
             cursor += TypeSizes.SHORT;
 #endif
@@ -111,7 +111,7 @@ namespace Meridian59.Protocol.GameMessages
             Buffer[0] = (byte)(ROTATETODEST | (byte)MovementSpeed);
             Buffer++;
 
-#if !VANILLA && !OPENMERIDIAN
+#if !VANILLA
             *((ushort*)Buffer) = Angle;
             Buffer += TypeSizes.SHORT;
 #endif
@@ -134,7 +134,7 @@ namespace Meridian59.Protocol.GameMessages
             RotateToDestination = ((Buffer[0] & ROTATETODEST) == ROTATETODEST);
             Buffer++;
 
-#if !VANILLA && !OPENMERIDIAN
+#if !VANILLA
             Angle = *((ushort*)Buffer);
             Buffer += TypeSizes.SHORT;
 #endif
