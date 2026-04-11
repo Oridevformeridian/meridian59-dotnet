@@ -17,17 +17,18 @@
 using System;
 using Meridian59.Common.Constants;
 using Meridian59.Protocol.Enums;
+using Meridian59.Data.Models;
 
 namespace Meridian59.Protocol.GameMessages
 {
-    public class SectorLightMessage : GameModeMessage
+    public class SectorAnimateMessage : GameModeMessage
     {       
         #region IByteSerializable implementation
         public override int ByteLength
         {
             get
             {
-                return base.ByteLength + TypeSizes.SHORT + TypeSizes.BYTE;
+                return base.ByteLength + SectorChange.ByteLength;
             }
         }
 
@@ -36,12 +37,7 @@ namespace Meridian59.Protocol.GameMessages
             int cursor = StartIndex;
 
             cursor += base.WriteTo(Buffer, cursor);
-            
-            Array.Copy(BitConverter.GetBytes(SectorNum), 0, Buffer, cursor, TypeSizes.SHORT);
-            cursor += TypeSizes.SHORT;
-
-            Buffer[cursor] = LightType;
-            cursor++;
+            cursor += SectorChange.WriteTo(Buffer, cursor);
                   
             return cursor - StartIndex;
         }
@@ -52,27 +48,22 @@ namespace Meridian59.Protocol.GameMessages
 
             cursor += base.ReadFrom(Buffer, cursor);
 
-            SectorNum = BitConverter.ToUInt16(Buffer, cursor);
-            cursor += TypeSizes.SHORT;
-
-            LightType = Buffer[cursor];
-            cursor++;
+            SectorChange = new SectorChange(Buffer, cursor);
+            cursor += SectorChange.ByteLength;
           
             return cursor - StartIndex;
         }
         #endregion
 
-        public ushort SectorNum { get; set; }
-        public byte LightType { get; set; }
+        public SectorChange SectorChange { get; set; }
 
-        public SectorLightMessage(ushort SectorNum, byte LightType) 
-            : base(MessageTypeGameMode.SectorLight)
+        public SectorAnimateMessage(SectorChange SectorChange) 
+            : base(MessageTypeGameMode.SectorAnimate)
         {
-            this.SectorNum = SectorNum;
-            this.LightType = LightType;
+            this.SectorChange = SectorChange;
         }
 
-        public SectorLightMessage(byte[] Buffer, int StartIndex = 0) 
+        public SectorAnimateMessage(byte[] Buffer, int StartIndex = 0) 
             : base (Buffer, StartIndex) { }
     }
 }

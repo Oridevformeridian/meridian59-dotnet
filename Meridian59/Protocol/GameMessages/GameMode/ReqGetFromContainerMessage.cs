@@ -20,14 +20,14 @@ using Meridian59.Protocol.Enums;
 
 namespace Meridian59.Protocol.GameMessages
 {
-    public class SectorLightMessage : GameModeMessage
+    public class ReqGetFromContainerMessage : GameModeMessage
     {       
         #region IByteSerializable implementation
         public override int ByteLength
         {
             get
             {
-                return base.ByteLength + TypeSizes.SHORT + TypeSizes.BYTE;
+                return base.ByteLength + TypeSizes.INT;
             }
         }
 
@@ -37,11 +37,8 @@ namespace Meridian59.Protocol.GameMessages
 
             cursor += base.WriteTo(Buffer, cursor);
             
-            Array.Copy(BitConverter.GetBytes(SectorNum), 0, Buffer, cursor, TypeSizes.SHORT);
-            cursor += TypeSizes.SHORT;
-
-            Buffer[cursor] = LightType;
-            cursor++;
+            Array.Copy(BitConverter.GetBytes(ObjectID), 0, Buffer, cursor, TypeSizes.INT);
+            cursor += TypeSizes.INT;
                   
             return cursor - StartIndex;
         }
@@ -52,27 +49,22 @@ namespace Meridian59.Protocol.GameMessages
 
             cursor += base.ReadFrom(Buffer, cursor);
 
-            SectorNum = BitConverter.ToUInt16(Buffer, cursor);
-            cursor += TypeSizes.SHORT;
-
-            LightType = Buffer[cursor];
-            cursor++;
+            ObjectID = BitConverter.ToUInt32(Buffer, cursor);
+            cursor += TypeSizes.INT;
           
             return cursor - StartIndex;
         }
         #endregion
 
-        public ushort SectorNum { get; set; }
-        public byte LightType { get; set; }
+        public uint ObjectID { get; set; }
 
-        public SectorLightMessage(ushort SectorNum, byte LightType) 
-            : base(MessageTypeGameMode.SectorLight)
+        public ReqGetFromContainerMessage(uint ObjectID) 
+            : base(MessageTypeGameMode.ReqGetFromContainer)
         {
-            this.SectorNum = SectorNum;
-            this.LightType = LightType;
+            this.ObjectID = ObjectID;
         }
 
-        public SectorLightMessage(byte[] Buffer, int StartIndex = 0) 
+        public ReqGetFromContainerMessage(byte[] Buffer, int StartIndex = 0) 
             : base (Buffer, StartIndex) { }
     }
 }

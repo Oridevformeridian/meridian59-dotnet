@@ -1,34 +1,33 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.ComponentModel;
+using System.Linq;
+using System.Text;
+using System.Threading;
 using Meridian59.Bot;
-using Meridian59.Client;
-using Meridian59.Files;
+using Meridian59.Common;
+using Meridian59.Common.Constants;
+using Meridian59.Common.Enums;
 using Meridian59.Data;
 using Meridian59.Data.Models;
+using Meridian59.Files;
+using Meridian59.Files.ROO;
 using Meridian59.Protocol.Enums;
 using Meridian59.Protocol.GameMessages;
-using Meridian59.Common.Enums;
-using Meridian59.Common;
 
-#if X64
-using Real = System.Double;
-#else
 using Real = System.Single;
-#endif
 
 namespace Meridian59.TuiClient
 {
-    /// <summary>
-    /// One entry in the scrollback log ringbuffer.
-    /// </summary>
-    readonly struct LogEntry
+    public enum PopupMode
     {
-        public readonly string Timestamp;
-        public readonly string Type;
-        public readonly string Text;
-        public LogEntry(string ts, string type, string text) { Timestamp = ts; Type = type; Text = text; }
+        None,
+        MailList,
+        MailRead,
+        MailCompose,
+        NewsList,
+        NewsRead,
+        NewsCompose
     }
 
     public class TuiClient : BotClient<GameTick, ResourceManager, DataController, TuiConfig>
@@ -37,30 +36,61 @@ namespace Meridian59.TuiClient
         private PathRecorder recorder;
         private bool isRecording = false;
         private string recordingFile = null;
+        private bool isNoClip = false;
 
         private int lastWindowWidth;
         private int lastWindowHeight;
-        private bool sentRoomContentsRequest = false;
         private uint lastRoomID = 0;
+
+        // UI State
+        private PopupMode activePopup = PopupMode.None;
+        private int popupSelectedIndex = 0;
+        private int popupScrollOffset = 0;
+        private object currentPopupItem = null;
+        private bool popupJustClosed = false;
+
+        // Composition State
+        private string composeRecipient = "";
+        private string composeSubject = "";
+        private List<string> composeBody = new List<string> { "" };
+        private int composeState = 0; // 0=Recipient, 1=Subject, 2=Body
+
+        // Concurrency
+        private readonly object consoleLock = new object();
+        private readonly object logLock = new object();
+
+        // Overrides to prevent base class drawing
+        public override void DrawCoordinates() { }
+        public override void DrawCondition() { }
+        public override void DrawRoom() { }
+        public override void DrawResting() { }
+        public override void DrawRTT() { }
+        public override void DrawCash() { }
+        public override void DrawBoxes() { }
 
         // Scrollback ringbuffer
         private const int LOG_CAPACITY = 500;
         private readonly List<LogEntry> logBuffer = new List<LogEntry>(LOG_CAPACITY + 1);
         private int scrollOffset = 0;   // 0 = newest at bottom, positive = scrolled back
 
+        public struct LogEntry
+        {
+            public readonly DateTime Timestamp;
+            public readonly string Type;
+            public readonly string Text;
+            public LogEntry(string type, string text) { Timestamp = DateTime.Now; Type = type; Text = text; }
+        }
+
         // Text input
         private string inputBuffer = "";
         private bool inputMode = false;  // true = typing into chat input; false = gameplay keys active
 
-        // Auto-quit: disconnect this many seconds after entering game mode (0 = disabled)
+        // Auto-quit
         private const int AUTO_QUIT_SECONDS = 0;
         private DateTime gameModeSince = DateTime.MinValue;
 
         // Script execution
         public bool NoAutoexec { get; set; } = false;
-        private Queue<string> scriptQueue = null;
-        private DateTime scriptNextAt = DateTime.MinValue;
-        private bool scriptTriggered = false;
 
         // Layout constants
         private const int LOG_FIRST_ROW = 5;  // first row of the log area (row 0-4 are stats)
@@ -70,6 +100,7 @@ namespace Meridian59.TuiClient
         {
             renderer = new AsciiRenderer();
             recorder = new PathRecorder(this);
+            IsService = true; // Completely suppress BotClient console drawing and input loop
             lastWindowWidth = Console.WindowWidth;
             lastWindowHeight = Console.WindowHeight;
         }
@@ -100,14 +131,49 @@ namespace Meridian59.TuiClient
 
             if (!HasTty) return;
             Console.CursorVisible = false;
-            Console.Clear();
-            DrawTuiLayout();
+            lock (consoleLock)
+            {
+                Console.Clear();
+                DrawTuiLayout();
+            }
+
+            // Hook up data changes to trigger redraws if popup is active
+            Data.NewsGroup.Articles.ListChanged += (s, e) => { if (activePopup == PopupMode.NewsList) DrawMap(); };
+            ResourceManager.Mails.ListChanged += (s, e) => { if (activePopup == PopupMode.MailList) DrawMap(); };
+            Data.NewsGroup.PropertyChanged += (s, e) => { if (activePopup == PopupMode.NewsRead && e.PropertyName == "Text") DrawMap(); };
+
+            // Ensure UI updates when room or avatar changes
+            Data.PropertyChanged += (s, e) => {
+                if (e.PropertyName == "RoomInformation" || e.PropertyName == "AvatarObject")
+                {
+                    DrawRoomInfo();
+                    DrawMap();
+                }
+            };
         }
 
         public override void Update()
         {
-            try { base.Update(); }
+            try 
+            { 
+                base.Update();
+                ProcessScriptQueue();
+            }
             catch (InvalidOperationException) { /* no TTY */ }
+
+            // Manually handle input loop since IsService=true disables it in base
+            if (HasTty)
+            {
+                try
+                {
+                    while (Console.KeyAvailable)
+                    {
+                        ConsoleKeyInfo key = Console.ReadKey(true);
+                        ProcessKeyPress(key);
+                    }
+                }
+                catch (InvalidOperationException) { /* No TTY attached */ }
+            }
 
             // Game logic runs regardless of TTY
             if (AUTO_QUIT_SECONDS > 0 && gameModeSince != DateTime.MinValue &&
@@ -119,123 +185,152 @@ namespace Meridian59.TuiClient
                 return;
             }
 
-            // Trigger autoexec once avatar is in world
-            if (!scriptTriggered && Data.AvatarObject != null &&
-                !string.IsNullOrEmpty(Data.RoomInformation?.RoomName))
+            // Record game mode entry
+            if (Data.UIMode == UIMode.Playing && gameModeSince == DateTime.MinValue)
             {
-                scriptTriggered = true;
-                if (!NoAutoexec) LoadAutoexec();
-                scriptNextAt = DateTime.Now.AddMilliseconds(500);
+                gameModeSince = DateTime.Now;
             }
-            TickScript();
 
             // UI rendering only when TTY is available
             if (!HasTty) return;
 
-            if (Console.WindowWidth != lastWindowWidth || Console.WindowHeight != lastWindowHeight)
+            lock (consoleLock)
             {
-                lastWindowWidth = Console.WindowWidth;
-                lastWindowHeight = Console.WindowHeight;
-                Console.Clear();
-                renderer.Invalidate();
-                DrawTuiLayout();
-            }
-            else
-            {
-                DrawStats();
-                DrawRoomInfo();
-                DrawMap();
-                DrawInputField();
+                if (Console.WindowWidth != lastWindowWidth || Console.WindowHeight != lastWindowHeight)
+                {
+                    lastWindowWidth = Console.WindowWidth;
+                    lastWindowHeight = Console.WindowHeight;
+                    Console.Clear();
+                    renderer.Invalidate();
+                    DrawTuiLayout();
+                }
+                else
+                {
+                    // Detect room change
+                    var ri = Data.RoomInformation;
+                    if (ri != null && ri.RoomID != lastRoomID)
+                    {
+                        lastRoomID = ri.RoomID;
+                        Console.Clear();
+                        DrawTuiLayout();
+                    }
+                    else
+                    {
+                        DrawStats();
+                        DrawRoomInfo();
+                        DrawMap();
+                        DrawInputField();
+                    }
+                }
             }
         }
 
-        protected override void HandleSaidMessage(Meridian59.Protocol.GameMessages.SaidMessage Message)
+        protected override void HandleSaidMessage(SaidMessage Message)
         {
             base.HandleSaidMessage(Message);
             string text = Message.Message?.FullString;
             if (!string.IsNullOrEmpty(text))
-                Log("CHAT", text);
-        }
-
-        protected override void HandleAdminMessage(Meridian59.Protocol.GameMessages.AdminMessage Message)
-        {
-            base.HandleAdminMessage(Message);
-            if (!string.IsNullOrEmpty(Message.Message))
-                Log("SYS", Message.Message);
-        }
-
-        protected override void HandleMessageMessage(Meridian59.Protocol.GameMessages.MessageMessage Message)
-        {
-            base.HandleMessageMessage(Message);
-            string text = Message.Message?.FullString;
-            if (!string.IsNullOrEmpty(text))
-                Log("SYS", text);
-        }
-
-        protected override void HandleGameMessage(Meridian59.Protocol.GameMessages.GameMessage Message)
-        {
-            // Log hex of the message for debugging
-            if (Message is Meridian59.Protocol.GameMessages.GenericGameMessage gen)
             {
-                var hexBytes = gen.Data != null
-                    ? BitConverter.ToString(gen.Data).Replace("-", " ")
-                    : "(null)";
-                Log("NET", $"Unknown PI={Message.PI}: {hexBytes}");
+                var speaker = Data.RoomObjects.FirstOrDefault(o => o.ID == Message.Message.SourceObjectID);
+                string speakerName = speaker?.Name ?? "???";
+                Log("CHAT", $"{speakerName}: {text}");
+            }
+        }
+
+        private Queue<string> scriptQueue = new Queue<string>();
+        private DateTime nextScriptCommandTime = DateTime.MinValue;
+
+        protected override void HandleGameStateMessage(GameStateMessage Message)
+        {
+            base.HandleGameStateMessage(Message);
+            if (!NoAutoexec)
+            {
+                LoadAutoexec();
+            }
+        }
+
+        private void LoadAutoexec()
+        {
+            if (File.Exists("autoexec.script"))
+            {
+                Log("SYS", "Loading autoexec.script...");
+                string[] lines = File.ReadAllLines("autoexec.script");
+                foreach (string line in lines)
+                {
+                    string cmd = line.Trim();
+                    if (string.IsNullOrEmpty(cmd) || cmd.StartsWith("//") || cmd.StartsWith("#"))
+                        continue;
+                    scriptQueue.Enqueue(cmd);
+                }
+            }
+        }
+
+        private void ProcessScriptQueue()
+        {
+            if (scriptQueue.Count == 0 || DateTime.Now < nextScriptCommandTime)
+                return;
+
+            string cmd = scriptQueue.Dequeue();
+            
+            if (cmd.StartsWith("wait ", StringComparison.OrdinalIgnoreCase))
+            {
+                if (int.TryParse(cmd.Substring(5), out int ms))
+                {
+                    nextScriptCommandTime = DateTime.Now.AddMilliseconds(ms);
+                    return;
+                }
+            }
+            if (cmd.StartsWith("log ", StringComparison.OrdinalIgnoreCase))
+            {
+                Log("SYS", cmd.Substring(4));
             }
             else
             {
-                // For known messages, we might want to see the raw data too
-                // Since base.HandleGameMessage might consume it, we just log the PI and type
-                // Log("NET", $"RECV: PI={Message.PI} ({Message.GetType().Name})");
+                ProcessCommand(cmd);
             }
-            base.HandleGameMessage(Message);
         }
 
-        protected override void HandleGameModeMessage(Meridian59.Protocol.GameMessages.GameModeMessage Message)
+        protected override void HandleGameModeMessage(GameModeMessage Message)
         {
-            if (gameModeSince == DateTime.MinValue)
-                gameModeSince = DateTime.Now;
+            var pi = (MessageTypeGameMode)Message.PI;
 
-            var pi = (Meridian59.Protocol.Enums.MessageTypeGameMode)Message.PI;
-            
-            // Log every message for debugging
-            Log("NET", $"PI={Message.PI} ({pi})");
-
-            if (pi == Meridian59.Protocol.Enums.MessageTypeGameMode.Player)
+            if (Config.IsDebugEnabled)
             {
-                var pMsg = (Meridian59.Protocol.GameMessages.PlayerMessage)Message;
-                if (pMsg.RoomInfo.RoomID != lastRoomID)
-                {
-                    sentRoomContentsRequest = false;
-                    lastRoomID = pMsg.RoomInfo.RoomID;
-                }
-                var ri = pMsg.RoomInfo;
-                Log("NET", $"Player: room={ri.RoomID} avatar={ri.AvatarID}");
+                Log("DEBUG", $"NET RECV: PI={Message.PI} ({pi}) Length={Message.ByteLength}");
             }
-            else if (pi == Meridian59.Protocol.Enums.MessageTypeGameMode.Move)
+
+            if (pi == MessageTypeGameMode.Message)
             {
-                var m = (Meridian59.Protocol.GameMessages.MoveMessage)Message;
+                var pMsg = (MessageMessage)Message;
+                if (pMsg.Message != null)
+                {
+                    Log("SYS", pMsg.Message.FullString);
+                }
+            }
+            else if (pi == MessageTypeGameMode.Move)
+            {
+                var m = (MoveMessage)Message;
                 var avatarID = Data.AvatarObject?.ID ?? 0;
                 Log("NET", $"Move: obj={m.ObjectID}{(m.ObjectID == avatarID ? " (AVATAR)" : "")} x={m.NewCoordinateX} y={m.NewCoordinateY} spd={m.MovementSpeed}");
             }
-            else if (pi == Meridian59.Protocol.Enums.MessageTypeGameMode.PlayWave)
+            else if (pi == MessageTypeGameMode.PlayWave)
             {
-                var w = (Meridian59.Protocol.GameMessages.PlayWaveMessage)Message;
+                var w = (PlayWaveMessage)Message;
                 Log("NET", $"PlayWave: {w.PlayInfo?.ResourceName ?? "?"}");
             }
-            else if (pi == Meridian59.Protocol.Enums.MessageTypeGameMode.Effect)
+            else if (pi == MessageTypeGameMode.Effect)
             {
-                var e = (Meridian59.Protocol.GameMessages.EffectMessage)Message;
+                var e = (EffectMessage)Message;
                 Log("NET", $"Effect: {e.Effect}");
             }
-            else if (pi == Meridian59.Protocol.Enums.MessageTypeGameMode.Create)
+            else if (pi == MessageTypeGameMode.Create)
             {
-                var c = (Meridian59.Protocol.GameMessages.CreateMessage)Message;
+                var c = (CreateMessage)Message;
                 Log("NET", $"Create: obj={c.NewRoomObject?.ID} name={c.NewRoomObject?.Name} x={c.NewRoomObject?.CoordinateX} y={c.NewRoomObject?.CoordinateY}");
             }
-            else if (pi == Meridian59.Protocol.Enums.MessageTypeGameMode.Spells)
+            else if (pi == MessageTypeGameMode.Spells)
             {
-                var s = (Meridian59.Protocol.GameMessages.SpellsMessage)Message;
+                var s = (SpellsMessage)Message;
                 Log("NET", $"Spells: Count={s.SpellObjects.Length}");
                 foreach (var spell in s.SpellObjects)
                 {
@@ -248,61 +343,75 @@ namespace Meridian59.TuiClient
 
         // ── Layout ──────────────────────────────────────────────────────────────
 
-        public override void DrawBoxes()
+        private void DrawTuiLayout()
         {
             int w = Console.WindowWidth;
             int h = Console.WindowHeight;
+            if (w < 85 || h < 10) return;
 
-            // Row 0: top border
-            Console.SetCursorPosition(0, 0);
-            Console.Write("╔" + new string('═', 14) + "╦" + new string('═', 43) + "╦" + new string('═', 19) + "╗ ╔" + new string('═', Math.Max(0, w - 84)) + "╗");
-
-            // Rows 2-4: stats sub-borders
-            Console.SetCursorPosition(0, 2);
-            Console.Write("║" + new string(' ', 14) + "╠" + new string('═', 13) + "╦" + new string('═', 15) + "╦" + new string('═', 13) + "╬" + new string('═', 19) + "╣ ║" + new string(' ', Math.Max(0, w - 84)) + "║");
-            Console.SetCursorPosition(0, 3);
-            Console.Write("║" + new string(' ', 14) + "║" + new string(' ', 13) + "║" + new string(' ', 15) + "║" + new string(' ', 13) + "║" + new string(' ', 19) + "║ ║" + new string(' ', Math.Max(0, w - 84)) + "║");
-            Console.SetCursorPosition(0, 4);
-            Console.Write("╠" + new string('═', 14) + "╩" + new string('═', 13) + "╩" + new string('═', 15) + "╩" + new string('═', 13) + "╩" + new string('═', 19) + "╣ ║" + new string(' ', Math.Max(0, w - 84)) + "║");
-
-            // Side borders: rows 1 and rows 5..h-4 (log area)
-            for (int i = 1; i < h - 3; i++)
+            lock (consoleLock)
             {
-                if (i == 2 || i == 3 || i == 4) continue;
-                Console.SetCursorPosition(0, i);
+                // Row 0: top border
+                Console.SetCursorPosition(0, 0);
+                string topL = "╔" + new string('═', 14) + "╦" + new string('═', 43) + "╦" + new string('═', 19) + "╗"; // 80 chars
+                string topR = " ╔" + new string('═', Math.Max(0, w - 84)) + "╗";
+                Console.Write(SafeLine(topL + topR, w - 1));
+
+                // Rows 2-4: stats sub-borders
+                Console.SetCursorPosition(0, 2);
+                string midL = "║" + new string(' ', 14) + "╠" + new string('═', 13) + "╦" + new string('═', 15) + "╦" + new string('═', 13) + "╬" + new string('═', 19) + "╣";
+                string midR = " ║" + new string(' ', Math.Max(0, w - 84)) + "║";
+                Console.Write(SafeLine(midL + midR, w - 1));
+
+                Console.SetCursorPosition(0, 3);
+                string statL = "║" + new string(' ', 14) + "║" + new string(' ', 13) + "║" + new string(' ', 15) + "║" + new string(' ', 13) + "║" + new string(' ', 19) + "║";
+                Console.Write(SafeLine(statL + midR, w - 1));
+
+                Console.SetCursorPosition(0, 4);
+                string botL = "╠" + new string('═', 14) + "╩" + new string('═', 13) + "╩" + new string('═', 15) + "╩" + new string('═', 13) + "╩" + new string('═', 19) + "╣";
+                Console.Write(SafeLine(botL + midR, w - 1));
+
+                // Side borders
+                for (int i = 1; i < h - 1; i++)
+                {
+                    if (i == 2 || i == 3 || i == 4 || i == h - 3 || i == h - 1) continue;
+                    Console.SetCursorPosition(0, i);
+                    Console.Write("║");
+                    Console.SetCursorPosition(79, i); 
+                    Console.Write("║ ║"); 
+                    Console.SetCursorPosition(w - 2, i);
+                    Console.Write("║");
+                }
+
+                // Input separator at h-3
+                Console.SetCursorPosition(0, h - 3);
+                string sepL = "╠" + new string('═', 78) + "╣";
+                string sepR = " ║" + new string(' ', Math.Max(0, w - 84)) + "║";
+                Console.Write(SafeLine(sepL + sepR, w - 1));
+
+                // Input field row at h-2: Draw Borders explicitly
+                Console.SetCursorPosition(0, h - 2);
                 Console.Write("║");
-                Console.SetCursorPosition(15, i);
-                if (i < 4) Console.Write("║");
-                Console.SetCursorPosition(59, i);
-                if (i < 4) Console.Write("║");
-                Console.SetCursorPosition(79, i);
-                Console.Write("║ ║");
-                Console.SetCursorPosition(Math.Max(0, w - 1), i);
-                Console.Write("║");
+                Console.SetCursorPosition(79, h - 2);
+                Console.Write("║ ╚" + new string('═', Math.Max(0, w - 84)) + "╝");
+
+                // Hint bar at h-1
+                Console.SetCursorPosition(0, h - 1);
+                string hints = " [Enter]Chat  [Arrows/WASD]Move  [+/-]Zoom  [PgUp/Dn]Scroll  [Q]uit";
+                Console.Write(SafeLine("╚" + hints.PadRight(78, '═') + "╝", w - 1));
+
+                DrawStats();
+                DrawRoomInfo();
+                DrawLog();
+                DrawInputField();
+                DrawMap();
             }
-
-            // Input separator at h-3
-            Console.SetCursorPosition(0, h - 3);
-            Console.Write("╠" + new string('═', 79) + "╣ ║" + new string(' ', Math.Max(0, w - 84)) + "║");
-
-            // Input field row at h-2
-            Console.SetCursorPosition(0, h - 2);
-            Console.Write("║" + new string(' ', 79) + "║ ╚" + new string('═', Math.Max(0, w - 84)) + "╝");
-
-            // Hint bar at h-1
-            Console.SetCursorPosition(0, h - 1);
-            string hints = " [Enter]Chat  [Arrows/WASD]Move  [+/-]Zoom  [PgUp/Dn]Scroll  [Q]uit";
-            Console.Write("╚" + hints.PadRight(79, '═') + "╝");
         }
 
-        private void DrawTuiLayout()
+        private string SafeLine(string line, int max)
         {
-            DrawBoxes();
-            DrawStats();
-            DrawRoomInfo();
-            DrawLog();
-            DrawInputField();
-            DrawMap();
+            string sanitized = line.Replace('\n', ' ').Replace('\r', ' ').Replace('\t', ' ');
+            return sanitized.Length > max ? sanitized[..max] : sanitized;
         }
 
         // ── Stats ────────────────────────────────────────────────────────────────
@@ -311,53 +420,59 @@ namespace Meridian59.TuiClient
         {
             var s = cond.GetItemByNum(num);
             if (s == null) return "---/---";
-            int max = s.ValueRenderMax > 0 ? s.ValueRenderMax : s.ValueMaximum;
-            return $"{s.ValueCurrent,3}/{max,3}";
+            return $"{s.ValueCurrent,3}/{s.ValueMaximum,-3}";
         }
 
         public void DrawStats()
         {
-            Console.SetCursorPosition(2, 1);
-            Console.ForegroundColor = ConsoleColor.Red;
-            Console.Write($"HP: {StatStr(Data.AvatarCondition, Meridian59.Common.Constants.StatNums.HITPOINTS)}");
+            if (!HasTty) return;
+            lock (consoleLock)
+            {
+                Console.SetCursorPosition(2, 1);
+                Console.Write("HP:  " + StatStr(Data.AvatarCondition, 1)); 
 
-            Console.SetCursorPosition(2, 2);
-            Console.ForegroundColor = ConsoleColor.Blue;
-            Console.Write($"MP: {StatStr(Data.AvatarCondition, Meridian59.Common.Constants.StatNums.MANA)}");
+                Console.SetCursorPosition(2, 2);
+                Console.Write("MP:  " + StatStr(Data.AvatarCondition, 2)); 
 
-            Console.SetCursorPosition(2, 3);
-            Console.ForegroundColor = ConsoleColor.Green;
-            Console.Write($"VIG:{StatStr(Data.AvatarCondition, Meridian59.Common.Constants.StatNums.VIGOR)}");
+                Console.SetCursorPosition(2, 3);
+                Console.Write("VIG: " + StatStr(Data.AvatarCondition, 3)); 
 
-            Console.SetCursorPosition(17, 3);
-            Console.ForegroundColor = ConsoleColor.Gray;
-            Console.Write($"RTT: {ServerConnection.RTT}ms   ");
+                uint cash = 0;
+                var shilling = Data.InventoryObjects.GetItemByName("shilling", false);
+                if (shilling != null) cash = (uint)shilling.Count;
 
-            Console.SetCursorPosition(33, 3);
-            Console.Write($"REST: {Data.IsResting,-5}");
+                Console.SetCursorPosition(50, 3);
+                Console.Write($"$: {cash,-8}");
 
-            Console.SetCursorPosition(49, 3);
-            Console.ForegroundColor = ConsoleColor.Yellow;
-            Console.Write($"$: {Data.Money,-8}");
+                Console.SetCursorPosition(17, 3);
+                Console.Write($"RTT: {ServerConnection.RTT,-4}ms");
 
-            Console.ResetColor();
+                Console.SetCursorPosition(33, 3);
+                Console.Write($"REST: {Data.IsResting,-5}");
+            }
         }
 
         public void DrawRoomInfo()
         {
-            Console.SetCursorPosition(17, 1);
-            Console.ForegroundColor = ConsoleColor.Cyan;
-            string roomName = Data.RoomInformation.RoomName ?? "LOADING...";
-            Console.Write($"ROOM: {roomName.PadRight(38)}");
-
-            Console.SetCursorPosition(61, 1);
+            if (!HasTty) return;
+            var ri = Data.RoomInformation;
             var avatar = Data.AvatarObject;
-            if (avatar != null)
-                Console.Write($"X:{avatar.CoordinateX,5} Y:{avatar.CoordinateY,5}");
-            else
-                Console.Write($"X:----- Y:-----");
 
-            Console.ResetColor();
+            lock (consoleLock)
+            {
+                Console.SetCursorPosition(17, 1);
+                Console.ForegroundColor = ConsoleColor.White;
+                string roomName = ri?.RoomName ?? "Unknown Room";
+                if (roomName.Length > 30) roomName = roomName[..27] + "...";
+                Console.Write($"ROOM: {roomName,-30}");
+                Console.ResetColor();
+
+                if (avatar != null)
+                {
+                    Console.SetCursorPosition(60, 1);
+                    Console.Write($"X: {avatar.CoordinateX,5} Y: {avatar.CoordinateY,5}");
+                }
+            }
         }
 
         // ── Log ──────────────────────────────────────────────────────────────────
@@ -366,95 +481,49 @@ namespace Meridian59.TuiClient
         {
             if (!HasTty) return;
 
-            int logTop  = LOG_FIRST_ROW + 1;
-            int logBot  = LogBottom;
-            int logH    = logBot - logTop;
-            if (logH <= 0) return;
+            int logWidth = 78;
+            int logHeight = LogBottom - LOG_FIRST_ROW;
 
-            int count = logBuffer.Count;
-            scrollOffset = Math.Max(0, Math.Min(scrollOffset, Math.Max(0, count - logH)));
-
-            int startIdx = count - scrollOffset - logH;
-
-            for (int row = 0; row < logH; row++)
+            lock (consoleLock)
             {
-                int idx = startIdx + row;
-                Console.SetCursorPosition(1, logTop + row);
-
-                if (idx < 0 || idx >= count)
+                lock (logLock)
                 {
-                    Console.ForegroundColor = ConsoleColor.Gray;
-                    Console.Write(new string(' ', LEFT_PANEL_WIDTH));
-                    continue;
+                    for (int i = 0; i < logHeight; i++)
+                    {
+                        int bufferIdx = logBuffer.Count - 1 - scrollOffset - (logHeight - 1 - i);
+                        Console.SetCursorPosition(1, LOG_FIRST_ROW + i);
+
+                        if (bufferIdx >= 0 && bufferIdx < logBuffer.Count)
+                        {
+                            var entry = logBuffer[bufferIdx];
+                            string prefix = entry.Timestamp.ToString("h:mm tt ");
+                            Console.ForegroundColor = ConsoleColor.Gray;
+                            Console.Write(prefix);
+
+                            switch (entry.Type)
+                            {
+                                case "CHAT":  Console.ForegroundColor = ConsoleColor.Green; break;
+                                case "SYS":   Console.ForegroundColor = ConsoleColor.Cyan; break;
+                                case "NET":   Console.ForegroundColor = ConsoleColor.DarkGray; break;
+                                case "ERROR": Console.ForegroundColor = ConsoleColor.Red; break;
+                                case "DEBUG": Console.ForegroundColor = ConsoleColor.DarkMagenta; break;
+                                default:      Console.ForegroundColor = ConsoleColor.White; break;
+                            }
+                            Console.Write($"{entry.Type,-8}");
+                            Console.ResetColor();
+
+                            string content = entry.Text;
+                            int avail = logWidth - 16; 
+                            Console.Write(SafeLine(content.PadRight(avail), avail));
+                        }
+                        else
+                        {
+                            Console.Write(new string(' ', logWidth));
+                        }
+                    }
                 }
-
-                var e = logBuffer[idx];
-                // e.Text is pre-formatted to LEFT_PANEL_WIDTH chars (done in Log())
-                // Continuation entries have empty Type → DarkGray
-                if (string.IsNullOrEmpty(e.Type))
-                    Console.ForegroundColor = ConsoleColor.DarkGray;
-                else switch (e.Type)
-                {
-                    case "ERROR": Console.ForegroundColor = ConsoleColor.Red;     break;
-                    case "CHAT":  Console.ForegroundColor = ConsoleColor.Cyan;    break;
-                    case "SYS":   Console.ForegroundColor = ConsoleColor.Yellow;  break;
-                    case "SYNC":  Console.ForegroundColor = ConsoleColor.Magenta; break;
-                    default:      Console.ForegroundColor = ConsoleColor.Gray;    break;
-                }
-                Console.Write(e.Text);
             }
-
-            if (scrollOffset > 0)
-            {
-                Console.ForegroundColor = ConsoleColor.DarkYellow;
-                string ind = $" ↑{scrollOffset} ";
-                Console.SetCursorPosition(79 - ind.Length, logTop);
-                Console.Write(ind);
-            }
-
-            Console.ResetColor();
         }
-
-        // ── Input field ──────────────────────────────────────────────────────────
-
-        public void DrawInputField()
-        {
-            if (!HasTty) return;
-
-            int h = Console.WindowHeight;
-            int fieldWidth = LEFT_PANEL_WIDTH - 2; // room after "> "
-
-            Console.SetCursorPosition(1, h - 2);
-
-            if (inputMode)
-            {
-                Console.ForegroundColor = ConsoleColor.White;
-                string display = inputBuffer.Length <= fieldWidth
-                    ? inputBuffer
-                    : inputBuffer[^fieldWidth..];
-                Console.Write("> " + display.PadRight(fieldWidth));
-            }
-            else
-            {
-                Console.ForegroundColor = ConsoleColor.DarkGray;
-                Console.Write("  " + "[Enter] to chat".PadRight(fieldWidth));
-            }
-
-            Console.ResetColor();
-        }
-
-        // ── Map ──────────────────────────────────────────────────────────────────
-
-        public void DrawMap()
-        {
-            int startX = 82;
-            int startY = 1;
-            int width  = Console.WindowWidth - startX - 2;
-            int height = Console.WindowHeight - 3;
-            renderer.Render(this, startX, startY, width, height);
-        }
-
-        // ── Log override ─────────────────────────────────────────────────────────
 
         public override void Log(string Type, string Text)
         {
@@ -462,206 +531,518 @@ namespace Meridian59.TuiClient
 
             if (Type == "DEBUG" && HasTty) return;
 
-            string ts     = DateTime.Now.ToShortTimeString();
-            string prefix = $"{ts} {Type,-8} ";          // e.g. "7:43 PM SYS      " (17–18 chars)
-            int    avail  = LEFT_PANEL_WIDTH - prefix.Length;  // chars available for message text
-            if (avail < 1) avail = 1;
-
-            // Sanitize: replace newline/tab chars with a space so Console.Write never jumps rows
-            string safe = Text.Replace('\n', ' ').Replace('\r', ' ').Replace('\t', ' ');
-
-            // First line
-            string firstText = WordWrapChunk(safe, avail, out string rest);
-            AddLogRow(ts, Type, (prefix + firstText).PadRight(LEFT_PANEL_WIDTH));
-
-            // Continuation lines: same indent width, blank prefix
-            string indent = new string(' ', prefix.Length);
-            int    cWidth = LEFT_PANEL_WIDTH - indent.Length;
-            if (cWidth < 1) cWidth = 1;
-            while (rest.Length > 0)
+            int avail = LEFT_PANEL_WIDTH - 16;
+            string sanitized = Text.Replace('\n', ' ').Replace('\r', ' ').Replace('\t', ' ');
+            
+            lock (logLock)
             {
-                string chunk = WordWrapChunk(rest, cWidth, out rest);
-                AddLogRow("", "", (indent + chunk).PadRight(LEFT_PANEL_WIDTH));
+                while (sanitized.Length > 0)
+                {
+                    string chunk;
+                    if (sanitized.Length <= avail)
+                    {
+                        chunk = sanitized;
+                        sanitized = "";
+                    }
+                    else
+                    {
+                        int lastSpace = sanitized.LastIndexOf(' ', avail);
+                        if (lastSpace > 0)
+                        {
+                            chunk = sanitized[..lastSpace];
+                            sanitized = sanitized[(lastSpace + 1)..];
+                        }
+                        else
+                        {
+                            chunk = sanitized[..avail];
+                            sanitized = sanitized[avail..];
+                        }
+                    }
+                    logBuffer.Add(new LogEntry(Type, chunk));
+                }
+
+                if (logBuffer.Count > LOG_CAPACITY)
+                    logBuffer.RemoveAt(0);
             }
 
-            if (HasTty && scrollOffset == 0)
+            if (scrollOffset == 0 && HasTty)
                 DrawLog();
         }
 
-        /// <summary>
-        /// Returns up to <paramref name="width"/> chars from <paramref name="text"/>,
-        /// breaking at the last space within that limit when possible.
-        /// <paramref name="remainder"/> receives the leftover (leading spaces stripped).
-        /// </summary>
-        private static string WordWrapChunk(string text, int width, out string remainder)
+        // ── Map ──────────────────────────────────────────────────────────────────
+
+        public void DrawMap()
         {
-            if (text.Length <= width)
+            int startX = 82; 
+            int startY = 5;  
+            int w = Console.WindowWidth;
+            int h = Console.WindowHeight;
+            
+            int width  = w - startX - 2; 
+            int height = h - 4 - startY; 
+
+            if (width < 10 || height < 5) return;
+
+            lock (consoleLock)
             {
-                remainder = "";
-                return text;
-            }
-
-            // Try to break at the last space within the allowed width
-            int breakAt = text.LastIndexOf(' ', width - 1);
-            if (breakAt <= 0)
-                breakAt = width; // no space found — hard break
-
-            string chunk = text[..breakAt];
-            remainder = text[breakAt..].TrimStart(' ');
-            return chunk;
-        }
-
-        private void AddLogRow(string ts, string type, string displayText)
-        {
-            logBuffer.Add(new LogEntry(ts, type, displayText));
-            if (logBuffer.Count > LOG_CAPACITY)
-                logBuffer.RemoveAt(0);
-        }
-
-        // ── Script runner ────────────────────────────────────────────────────────
-
-        private void LoadAutoexec()
-        {
-            const string path = "autoexec.script";
-            if (!File.Exists(path)) return;
-            scriptQueue = new Queue<string>();
-            foreach (var raw in File.ReadAllLines(path))
-            {
-                string line = raw.Trim();
-                if (line.Length == 0 || line.StartsWith('#')) continue;
-                scriptQueue.Enqueue(line);
-            }
-            Log("SYS", $"autoexec.script: {scriptQueue.Count} command(s) queued.");
-        }
-
-        private void TickScript()
-        {
-            if (scriptQueue == null || scriptQueue.Count == 0) return;
-            if (DateTime.Now < scriptNextAt) return;
-
-            string line = scriptQueue.Dequeue();
-            Log("SYS", $"[script] {line}");
-            ExecuteScriptLine(line);
-        }
-
-        private void ExecuteScriptLine(string line)
-        {
-            if (line.StartsWith("sleep ", StringComparison.OrdinalIgnoreCase))
-            {
-                if (int.TryParse(line.Substring(6).Trim(), out int ms))
-                    scriptNextAt = DateTime.Now.AddMilliseconds(ms);
-                return;
-            }
-            ProcessCommand(line);
-        }
-
-        // ── Command parsing ──────────────────────────────────────────────────────
-
-        private void ProcessCommand(string text)
-        {
-            // /quit, /logout
-            if (text.Equals("/quit", StringComparison.OrdinalIgnoreCase) ||
-                text.Equals("/logout", StringComparison.OrdinalIgnoreCase))
-            {
-                Log("SYS", "Disconnecting...");
-                ServerConnection.Disconnect();
-                IsRunning = false;
-                return;
-            }
-
-            // rest / stand
-            if (text.Equals("rest", StringComparison.OrdinalIgnoreCase))
-            {
-                SendUserCommandRest();
-                Log("SYS", "Resting...");
-                return;
-            }
-            if (text.Equals("stand", StringComparison.OrdinalIgnoreCase))
-            {
-                SendUserCommandStand();
-                Log("SYS", "Standing.");
-                return;
-            }
-
-            // cast <spell>
-            if (text.StartsWith("cast ", StringComparison.OrdinalIgnoreCase))
-            {
-                string spellName = text.Substring(5).Trim();
-                var matches = Data.SpellObjects.GetItemsByNamePrefix(spellName);
-                if (matches.Count == 0)
+                if (activePopup != PopupMode.None)
                 {
-                    Log("SYS", $"Unknown spell: '{spellName}'");
-                    if (Data.SpellObjects.Count > 0)
-                        Log("SYS", "Known: " + string.Join(", ", System.Linq.Enumerable.Select(Data.SpellObjects, s => s.Name)));
-                    return;
-                }
-                var spell = matches[0];
-                // Build and send ReqCastMessage directly to bypass the
-                // IsVisibleFrom(CurrentRoom) check which returns false when
-                // the ROO file isn't loaded (bot/headless context).
-                ObjectID[] targets;
-                if (spell.TargetsCount > 0 && Data.AvatarObject != null)
-                {
-                    targets = new[] { new ObjectID(Data.AvatarObject.ID) };
-                    Log("SYS", $"Casting: {spell.Name} (Target: Self {Data.AvatarObject.ID})");
+                    DrawPopup(startX, startY, width, height);
                 }
                 else
                 {
-                    targets = new ObjectID[0];
-                    Log("SYS", $"Casting: {spell.Name} (No Target)");
+                    if (popupJustClosed)
+                    {
+                        // Clear popup frame leftovers
+                        Console.SetCursorPosition(startX, startY);
+                        Console.Write(new string(' ', width));
+                        Console.SetCursorPosition(startX, startY + height - 1);
+                        Console.Write(new string(' ', width));
+                        for (int i = 1; i < height - 1; i++)
+                        {
+                            Console.SetCursorPosition(startX, startY + i);
+                            Console.Write(" ");
+                            Console.SetCursorPosition(startX + width - 1, startY + i);
+                            Console.Write(" ");
+                        }
+                        popupJustClosed = false;
+                    }
+                    renderer.Render(this, startX + 1, startY + 1, width - 2, height - 2);
                 }
-                ServerConnection.SendQueue.Enqueue(
-                    new Meridian59.Protocol.GameMessages.ReqCastMessage(spell.ID, targets));
-                return;
             }
+        }
 
-            // go
-            if (text.Equals("go", StringComparison.OrdinalIgnoreCase))
+        private List<Mail> GetValidMails()
+        {
+            return ResourceManager.Mails.Where(m => !m.IsMessageForNoMessages() 
+                && !string.IsNullOrEmpty(m.Sender) 
+                && m.Sender != "0" 
+                && !m.Sender.Equals("none", StringComparison.OrdinalIgnoreCase)).ToList();
+        }
+
+        private void DrawPopup(int startX, int startY, int width, int height)
+        {
+            int w = Console.WindowWidth;
+            if (startX + width > w - 1) width = w - 1 - startX;
+            if (width < 5) return;
+
+            // 1. Window Frame
+            Console.SetCursorPosition(startX, startY);
+            Console.Write(SafeLine("╔" + new string('═', width - 2) + "╗", width));
+            for (int i = 1; i < height - 1; i++)
             {
-                SendReqGo(false);
-                Log("SYS", "Requested room transition (Go).");
-                return;
+                Console.SetCursorPosition(startX, startY + i);
+                Console.Write(SafeLine("║" + new string(' ', width - 2) + "║", width));
             }
+            Console.SetCursorPosition(startX, startY + height - 1);
+            Console.Write(SafeLine("╚" + new string('═', width - 2) + "╝", width));
 
-            // noclip
-            if (text.Equals("noclip", StringComparison.OrdinalIgnoreCase))
+            // 2. Title
+            string title = $" {activePopup} ";
+            if (title.Length > width - 4) title = title[..(width - 4)];
+            Console.SetCursorPosition(startX + (width - title.Length) / 2, startY);
+            Console.ForegroundColor = ConsoleColor.Cyan;
+            Console.Write(title);
+            Console.ResetColor();
+
+            // 3. Footer
+            string footer = activePopup.ToString().Contains("Compose") 
+                ? " [Enter:Next/Send] [Esc:Cancel] "
+                : " [Esc:Close] [Del:Delete] [R:Reply] [N:New] ";
+            if (footer.Length > width - 4) footer = footer[..(width - 4)];
+            Console.SetCursorPosition(startX + (width - footer.Length) / 2, startY + height - 1);
+            Console.ForegroundColor = ConsoleColor.Cyan;
+            Console.Write(footer);
+            Console.ResetColor();
+
+            int contentX = startX + 2;
+            int contentY = startY + 2;
+            int contentW = width - 4;
+            int contentH = height - 4;
+
+            if (contentW < 5 || contentH < 1) return;
+
+            if (activePopup == PopupMode.MailList)
             {
-                isNoClip = !isNoClip;
-                Log("SYS", $"Noclip is now {(isNoClip ? "ON" : "OFF")}");
-                return;
+                var mails = GetValidMails();
+                for (int i = 0; i < contentH && (i + popupScrollOffset) < mails.Count; i++)
+                {
+                    var mail = mails[i + popupScrollOffset];
+                    Console.SetCursorPosition(contentX, contentY + i);
+                    if (i + popupScrollOffset == popupSelectedIndex) Console.BackgroundColor = ConsoleColor.DarkBlue;
+                    string date = MeridianDate.ToDateTime(mail.Timestamp).ToShortDateString();
+                    string sender = mail.Sender ?? "Unknown";
+                    if (sender.Length > 20) sender = sender[..17] + "...";
+                    string line = $"[{date}] {sender,-20} {mail.Title}";
+                    Console.Write(SafeLine(line.PadRight(contentW), contentW));
+                    Console.ResetColor();
+                }
             }
-
-            // move north/south/east/west
-            if (text.StartsWith("move ", StringComparison.OrdinalIgnoreCase))
+            else if (activePopup == PopupMode.NewsList)
             {
-                string dir = text.Substring(5).Trim().ToLower();
-                if (dir == "n" || dir == "north") Move( 0,  1, 3072);
-                else if (dir == "s" || dir == "south") Move( 0, -1, 1024);
-                else if (dir == "e" || dir == "east") Move( 1,  0,    0);
-                else if (dir == "w" || dir == "west") Move(-1,  0, 2048);
-                else Log("SYS", $"Unknown direction: {dir}");
+                var articles = Data.NewsGroup.Articles;
+                for (int i = 0; i < contentH && (i + popupScrollOffset) < articles.Count; i++)
+                {
+                    var art = articles[i + popupScrollOffset];
+                    Console.SetCursorPosition(contentX, contentY + i);
+                    if (i + popupScrollOffset == popupSelectedIndex) Console.BackgroundColor = ConsoleColor.DarkBlue;
+                    string date = art.Time.ToShortDateString();
+                    string poster = art.Poster ?? "Unknown";
+                    if (poster.Length > 20) poster = poster[..17] + "...";
+                    string line = $"{art.Number,4} {poster,-20} {art.Title} ({date})";
+                    Console.Write(SafeLine(line.PadRight(contentW), contentW));
+                    Console.ResetColor();
+                }
+            }
+            else if (activePopup == PopupMode.MailRead || activePopup == PopupMode.NewsRead)
+            {
+                string text = "";
+                string header = "";
+                if (activePopup == PopupMode.MailRead && currentPopupItem is Mail m)
+                {
+                    header = $"From: {m.Sender}  Subj: {m.Title}";
+                    text = m.Message?.FullString ?? "";
+                }
+                else if (activePopup == PopupMode.NewsRead && currentPopupItem is ArticleHead ah)
+                {
+                    header = $"By: {ah.Poster}  Subj: {ah.Title}";
+                    text = Data.NewsGroup.Text ?? "(Loading...)";
+                }
+
+                Console.SetCursorPosition(contentX, contentY - 1);
+                Console.ForegroundColor = ConsoleColor.Yellow;
+                Console.Write(SafeLine(header.PadRight(contentW), contentW));
+                Console.ResetColor();
+
+                string[] lines = text.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None);
+                List<string> wrapped = new List<string>();
+                foreach (var l in lines)
+                {
+                    string rem = l;
+                    if (string.IsNullOrEmpty(rem)) { wrapped.Add(""); continue; }
+                    while (rem.Length > contentW)
+                    {
+                        wrapped.Add(rem[..contentW]);
+                        rem = rem[contentW..];
+                    }
+                    wrapped.Add(rem);
+                }
+
+                for (int i = 0; i < contentH && (i + popupScrollOffset) < wrapped.Count; i++)
+                {
+                    Console.SetCursorPosition(contentX, contentY + i);
+                    Console.Write(SafeLine(wrapped[i + popupScrollOffset].PadRight(contentW), contentW));
+                }
+            }
+            else if (activePopup == PopupMode.MailCompose || activePopup == PopupMode.NewsCompose)
+            {
+                bool isMail = activePopup == PopupMode.MailCompose;
+                int row = contentY;
+                if (isMail)
+                {
+                    Console.SetCursorPosition(contentX, row++);
+                    Console.Write(SafeLine(("To: ".PadRight(10) + composeRecipient).PadRight(contentW), contentW));
+                    if (composeState == 0) { Console.SetCursorPosition(contentX + 10 + composeRecipient.Length, row - 1); Console.Write("_"); }
+                }
+                Console.SetCursorPosition(contentX, row++);
+                Console.Write(SafeLine(("Subject: ".PadRight(10) + composeSubject).PadRight(contentW), contentW));
+                if (composeState == 1) { Console.SetCursorPosition(contentX + 10 + composeSubject.Length, row - 1); Console.Write("_"); }
+                row++;
+                Console.SetCursorPosition(contentX, row++);
+                Console.ForegroundColor = ConsoleColor.Yellow;
+                Console.Write(SafeLine("Message Body:".PadRight(contentW), contentW));
+                Console.ResetColor();
+                int bodyStartRow = row;
+                int availableRows = height - (bodyStartRow - startY) - 1;
+                for (int i = 0; i < availableRows && i < composeBody.Count; i++)
+                {
+                    Console.SetCursorPosition(contentX, bodyStartRow + i);
+                    Console.Write(SafeLine(composeBody[i].PadRight(contentW), contentW));
+                    if (composeState == 2 && i == composeBody.Count - 1)
+                    {
+                        Console.SetCursorPosition(contentX + composeBody[i].Length, bodyStartRow + i);
+                        Console.Write("_");
+                    }
+                }
+            }
+        }
+
+        private void ProcessPopupKeyPress(ConsoleKeyInfo key)
+        {
+            if (activePopup == PopupMode.MailCompose || activePopup == PopupMode.NewsCompose)
+            {
+                HandleComposeInput(key);
                 return;
             }
 
-            // say
-            SendSayToMessage(ChatTransmissionType.Normal, text);
-            Log("SYS", $"You: {text}");
+            int listSize = 0;
+            if (activePopup == PopupMode.MailList) listSize = GetValidMails().Count;
+            else if (activePopup == PopupMode.NewsList) listSize = Data.NewsGroup.Articles.Count;
 
-            if (isRecording)
-                recorder.Record("Said", Data.AvatarObject, $"Normal:{text}");
+            switch (key.Key)
+            {
+                case ConsoleKey.Escape:
+                    if (activePopup == PopupMode.MailRead) activePopup = PopupMode.MailList;
+                    else if (activePopup == PopupMode.NewsRead) activePopup = PopupMode.NewsList;
+                    else {
+                        activePopup = PopupMode.None;
+                        popupJustClosed = true;
+                    }
+                    popupScrollOffset = 0;
+                    DrawMap();
+                    break;
+
+                case ConsoleKey.Delete:
+                    if (activePopup == PopupMode.MailList)
+                    {
+                        var mails = GetValidMails();
+                        if (popupSelectedIndex < mails.Count)
+                        {
+                            var mailToDelete = mails[popupSelectedIndex];
+                            SendDeleteMail(mailToDelete.Num);
+                            ResourceManager.Mails.Remove(mailToDelete);
+                            if (popupSelectedIndex >= GetValidMails().Count) popupSelectedIndex = Math.Max(0, popupSelectedIndex - 1);
+                        }
+                    }
+                    else if (activePopup == PopupMode.NewsList)
+                    {
+                        if (popupSelectedIndex < Data.NewsGroup.Articles.Count)
+                        {
+                            var art = Data.NewsGroup.Articles[popupSelectedIndex];
+#if !VANILLA
+                            SendDeleteNews(Data.NewsGroup.NewsGlobeID, art.Number);
+#endif
+                            Data.NewsGroup.Articles.RemoveAt(popupSelectedIndex);
+                            if (popupSelectedIndex >= Data.NewsGroup.Articles.Count) popupSelectedIndex = Math.Max(0, popupSelectedIndex - 1);
+                        }
+                    }
+                    DrawMap();
+                    break;
+
+                case ConsoleKey.R:
+                    if (activePopup == PopupMode.MailList)
+                    {
+                        var mails = GetValidMails();
+                        if (popupSelectedIndex < mails.Count)
+                        {
+                            var m = mails[popupSelectedIndex];
+                            activePopup = PopupMode.MailCompose;
+                            composeRecipient = m.Sender;
+                            composeSubject = m.Title.StartsWith("Re:", StringComparison.OrdinalIgnoreCase) ? m.Title : "Re: " + m.Title;
+                            composeBody = new List<string> { "" };
+                            composeState = 2; 
+                            DrawMap();
+                        }
+                    }
+                    else if (activePopup == PopupMode.MailRead && currentPopupItem is Mail rm)
+                    {
+                        activePopup = PopupMode.MailCompose;
+                        composeRecipient = rm.Sender;
+                        composeSubject = rm.Title.StartsWith("Re:", StringComparison.OrdinalIgnoreCase) ? rm.Title : "Re: " + rm.Title;
+                        composeBody = new List<string> { "" };
+                        composeState = 2; 
+                        DrawMap();
+                    }
+                    else if (activePopup == PopupMode.NewsList && popupSelectedIndex < Data.NewsGroup.Articles.Count)
+                    {
+                        var art = Data.NewsGroup.Articles[popupSelectedIndex];
+                        activePopup = PopupMode.NewsCompose;
+                        composeSubject = art.Title.StartsWith("Re:", StringComparison.OrdinalIgnoreCase) ? art.Title : "Re: " + art.Title;
+                        composeBody = new List<string> { "" };
+                        composeState = 2; 
+                        DrawMap();
+                    }
+                    break;
+
+                case ConsoleKey.N:
+                    if (activePopup == PopupMode.MailList || activePopup == PopupMode.MailRead)
+                    {
+                        activePopup = PopupMode.MailCompose;
+                        composeRecipient = "";
+                        composeSubject = "";
+                        composeBody = new List<string> { "" };
+                        composeState = 0;
+                        DrawMap();
+                    }
+                    else if (activePopup == PopupMode.NewsList || activePopup == PopupMode.NewsRead)
+                    {
+                        activePopup = PopupMode.NewsCompose;
+                        composeSubject = "";
+                        composeBody = new List<string> { "" };
+                        composeState = 1;
+                        DrawMap();
+                    }
+                    break;
+
+                case ConsoleKey.UpArrow:
+                    if (activePopup == PopupMode.MailList || activePopup == PopupMode.NewsList)
+                    {
+                        if (popupSelectedIndex > 0) popupSelectedIndex--;
+                        if (popupSelectedIndex < popupScrollOffset) popupScrollOffset = popupSelectedIndex;
+                    }
+                    else if (popupScrollOffset > 0) popupScrollOffset--;
+                    DrawMap();
+                    break;
+
+                case ConsoleKey.DownArrow:
+                    if (activePopup == PopupMode.MailList || activePopup == PopupMode.NewsList)
+                    {
+                        if (popupSelectedIndex < listSize - 1) popupSelectedIndex++;
+                        int h = Console.WindowHeight;
+                        int height = h - 4 - 5; 
+                        int contentH = height - 4;
+                        if (popupSelectedIndex >= popupScrollOffset + contentH) popupScrollOffset = popupSelectedIndex - contentH + 1;
+                    }
+                    else popupScrollOffset++;
+                    DrawMap();
+                    break;
+
+                case ConsoleKey.PageUp:
+                    if (activePopup == PopupMode.MailList || activePopup == PopupMode.NewsList)
+                    {
+                        int h = Console.WindowHeight;
+                        int contentH = h - 4 - 5 - 4;
+                        popupSelectedIndex = Math.Max(0, popupSelectedIndex - contentH);
+                        popupScrollOffset = Math.Max(0, popupScrollOffset - contentH);
+                    }
+                    else popupScrollOffset = Math.Max(0, popupScrollOffset - 10);
+                    DrawMap();
+                    break;
+
+                case ConsoleKey.PageDown:
+                    if (activePopup == PopupMode.MailList || activePopup == PopupMode.NewsList)
+                    {
+                        int h = Console.WindowHeight;
+                        int contentH = h - 4 - 5 - 4;
+                        popupSelectedIndex = Math.Min(listSize - 1, popupSelectedIndex + contentH);
+                        popupScrollOffset = Math.Min(Math.Max(0, listSize - contentH), popupScrollOffset + contentH);
+                    }
+                    else popupScrollOffset += 10;
+                    DrawMap();
+                    break;
+
+                case ConsoleKey.Enter:
+                    if (activePopup == PopupMode.MailList)
+                    {
+                        var mails = GetValidMails();
+                        if (popupSelectedIndex < mails.Count)
+                        {
+                            currentPopupItem = mails[popupSelectedIndex];
+                            activePopup = PopupMode.MailRead;
+                            popupScrollOffset = 0;
+                        }
+                    }
+                    else if (activePopup == PopupMode.NewsList && popupSelectedIndex < Data.NewsGroup.Articles.Count)
+                    {
+                        var art = Data.NewsGroup.Articles[popupSelectedIndex];
+                        currentPopupItem = art;
+                        activePopup = PopupMode.NewsRead;
+                        popupScrollOffset = 0;
+                        SendReqArticle(Data.NewsGroup.NewsGlobeID, art.Number);
+                    }
+                    DrawMap();
+                    break;
+            }
+        }
+
+        private void HandleComposeInput(ConsoleKeyInfo key)
+        {
+            if (key.Key == ConsoleKey.Escape)
+            {
+                activePopup = (activePopup == PopupMode.MailCompose) ? PopupMode.MailList : PopupMode.NewsList;
+                DrawMap();
+                return;
+            }
+
+            if (key.Key == ConsoleKey.Enter)
+            {
+                if (composeState < 2) composeState++;
+                else
+                {
+                    if (string.IsNullOrEmpty(composeBody[^1])) FinishCompose();
+                    else composeBody.Add("");
+                }
+                DrawMap();
+                return;
+            }
+
+            if (key.Key == ConsoleKey.Backspace)
+            {
+                if (composeState == 0 && composeRecipient.Length > 0) composeRecipient = composeRecipient[..^1];
+                else if (composeState == 1 && composeSubject.Length > 0) composeSubject = composeSubject[..^1];
+                else if (composeState == 2)
+                {
+                    var lastLine = composeBody[^1];
+                    if (lastLine.Length > 0) composeBody[^1] = lastLine[..^1];
+                    else if (composeBody.Count > 1) composeBody.RemoveAt(composeBody.Count - 1);
+                }
+                DrawMap();
+                return;
+            }
+
+            if (!char.IsControl(key.KeyChar))
+            {
+                if (composeState == 0) composeRecipient += key.KeyChar;
+                else if (composeState == 1) composeSubject += key.KeyChar;
+                else if (composeState == 2) composeBody[^1] += key.KeyChar;
+                DrawMap();
+            }
+        }
+
+        private void FinishCompose()
+        {
+            string body = string.Join("\n", composeBody.Where(s => !string.IsNullOrEmpty(s)));
+            if (activePopup == PopupMode.MailCompose)
+            {
+                Log("SYS", $"Resolving recipient: {composeRecipient}...");
+                SendReqLookupNames(new[] { composeRecipient });
+            }
+            else
+            {
+                Log("SYS", "Posting to newsgroup...");
+                SendPostArticle(Data.NewsGroup.NewsGlobeID, composeSubject, body);
+                activePopup = PopupMode.NewsList;
+            }
+        }
+
+        protected override void HandleLookupNamesMessage(LookupNamesMessage Message)
+        {
+            base.HandleLookupNamesMessage(Message);
+            if (activePopup == PopupMode.MailCompose)
+            {
+                if (Message.ResolvedIDs.Length > 0 && ObjectID.IsValid(Message.ResolvedIDs[0].ID))
+                {
+                    string body = string.Join("\n", composeBody.Where(s => !string.IsNullOrEmpty(s)));
+                    SendSendMail(new[] { Message.ResolvedIDs[0] }, composeSubject, body);
+                    Log("SYS", "Mail sent.");
+                    activePopup = PopupMode.MailList;
+                    DrawMap();
+                }
+                else
+                {
+                    Log("ERROR", $"Recipient '{composeRecipient}' not found.");
+                    composeState = 0; 
+                    DrawMap();
+                }
+            }
         }
 
         // ── Input / movement ─────────────────────────────────────────────────────
 
         protected override void ProcessKeyPress(ConsoleKeyInfo key)
         {
+            if (activePopup != PopupMode.None)
+            {
+                ProcessPopupKeyPress(key);
+                return;
+            }
+
             if (inputMode)
             {
-                // ── Chat input mode ──────────────────────────────────────────
                 switch (key.Key)
                 {
                     case ConsoleKey.Enter:
-                        if (inputBuffer.Length > 0)
+                        if (!string.IsNullOrWhiteSpace(inputBuffer))
                         {
                             ProcessCommand(inputBuffer);
                             inputBuffer = "";
@@ -692,115 +1073,167 @@ namespace Meridian59.TuiClient
                         }
                         break;
                 }
-                return;
             }
-
-            // ── Normal / gameplay mode ───────────────────────────────────────
-            switch (key.Key)
+            else
             {
-                case ConsoleKey.Enter:
-                    // Enter chat mode
-                    inputMode = true;
-                    DrawInputField();
-                    break;
-
-                case ConsoleKey.PageUp:
+                switch (key.Key)
                 {
-                    int logH = LogBottom - (LOG_FIRST_ROW + 1);
-                    scrollOffset = Math.Min(scrollOffset + Math.Max(1, logH / 2),
-                                           Math.Max(0, logBuffer.Count - logH));
-                    DrawLog();
-                    break;
+                    case ConsoleKey.Enter:
+                        inputMode = true;
+                        DrawInputField();
+                        break;
+
+                    case ConsoleKey.Q:
+                        Log("SYS", "Exiting...");
+                        ServerConnection.Disconnect();
+                        IsRunning = false;
+                        break;
+
+                    case ConsoleKey.UpArrow:    Move( 0,  1, 3072); break;
+                    case ConsoleKey.DownArrow:  Move( 0, -1, 1024); break;
+                    case ConsoleKey.LeftArrow:  Move(-1,  0, 2048); break;
+                    case ConsoleKey.RightArrow: Move( 1,  0, 0);    break;
+
+                    case ConsoleKey.W: Move( 0,  1, 3072); break;
+                    case ConsoleKey.S: Move( 0, -1, 1024); break;
+                    case ConsoleKey.A: Move(-1,  0, 2048); break;
+                    case ConsoleKey.D: Move( 1,  0, 0);    break;
+
+                    case ConsoleKey.PageUp:
+                        scrollOffset = Math.Min(scrollOffset + 5, logBuffer.Count - 5);
+                        DrawLog();
+                        break;
+                    case ConsoleKey.PageDown:
+                        scrollOffset = Math.Max(0, scrollOffset - 5);
+                        DrawLog();
+                        break;
+
+                    case ConsoleKey.OemPlus:
+                    case ConsoleKey.Add:
+                        renderer.ZoomIn();
+                        DrawMap();
+                        break;
+
+                    case ConsoleKey.OemMinus:
+                    case ConsoleKey.Subtract:
+                        renderer.ZoomOut();
+                        DrawMap();
+                        break;
+
+                    case ConsoleKey.Spacebar:
+                        SendReqActivate();
+                        break;
+
+                    default:
+                        base.ProcessKeyPress(key);
+                        break;
                 }
-
-                case ConsoleKey.PageDown:
-                {
-                    int logH = LogBottom - (LOG_FIRST_ROW + 1);
-                    scrollOffset = Math.Max(0, scrollOffset - Math.Max(1, logH / 2));
-                    DrawLog();
-                    break;
-                }
-
-                case ConsoleKey.OemPlus:
-                case ConsoleKey.Add:
-                    renderer.ZoomIn();
-                    renderer.Invalidate();
-                    DrawMap();
-                    break;
-
-                case ConsoleKey.OemMinus:
-                case ConsoleKey.Subtract:
-                    renderer.ZoomOut();
-                    renderer.Invalidate();
-                    DrawMap();
-                    break;
-
-                // Arrow key movement
-                case ConsoleKey.UpArrow:    Move( 0,  1, 3072); break;
-                case ConsoleKey.DownArrow:  Move( 0, -1, 1024); break;
-                case ConsoleKey.LeftArrow:  Move(-1,  0, 2048); break;
-                case ConsoleKey.RightArrow: Move( 1,  0,    0); break;
-
-                // WASD also moves
-                case ConsoleKey.W: Move( 0,  1, 3072); break;
-                case ConsoleKey.S: Move( 0, -1, 1024); break;
-                case ConsoleKey.A: Move(-1,  0, 2048); break;
-                case ConsoleKey.D: Move( 1,  0,    0); break;
-
-                case ConsoleKey.Spacebar:
-                    SendReqActivate();
-                    SendReqGo(true);
-                    break;
-
-                case ConsoleKey.R:
-                    if (key.Modifiers == ConsoleModifiers.Control)
-                    {
-                        if (!isRecording)
-                        {
-                            recordingFile = $"path_{DateTime.Now:yyyyMMdd_HHmmss}.json";
-                            recorder.Start(recordingFile);
-                            isRecording = true;
-                            Log("SYS", "Recording started: " + recordingFile);
-                        }
-                        else
-                        {
-                            recorder.Stop();
-                            isRecording = false;
-                            Log("SYS", "Recording saved: " + recordingFile);
-                        }
-                    }
-                    break;
-
-                default:
-                    base.ProcessKeyPress(key);
-                    break;
             }
         }
 
-        private bool isNoClip = false;
+        private void ProcessCommand(string text)
+        {
+            if (text.Equals("/quit", StringComparison.OrdinalIgnoreCase) ||
+                text.Equals("/logout", StringComparison.OrdinalIgnoreCase))
+            {
+                Log("SYS", "Disconnecting...");
+                ServerConnection.Disconnect();
+                IsRunning = false;
+                return;
+            }
 
-        private bool DoFineStep(Meridian59.Common.V2 direction, float worldDist)
+            if (text.Equals("/mail", StringComparison.OrdinalIgnoreCase))
+            {
+                activePopup = PopupMode.MailList;
+                popupSelectedIndex = 0;
+                popupScrollOffset = 0;
+                SendReqGetMail();
+                DrawMap();
+                return;
+            }
+
+            if (text.Equals("/news", StringComparison.OrdinalIgnoreCase))
+            {
+                activePopup = PopupMode.NewsList;
+                popupSelectedIndex = 0;
+                popupScrollOffset = 0;
+                if (Data.NewsGroup.NewsGlobeID != 0) SendReqArticles();
+                else Log("SYS", "No newsgroup selected. (Look at a newsglobe first)");
+                DrawMap();
+                return;
+            }
+
+            if (text.Equals("go", StringComparison.OrdinalIgnoreCase))
+            {
+                SendReqGo(true);
+                return;
+            }
+
+            if (text.Equals("noclip", StringComparison.OrdinalIgnoreCase))
+            {
+                isNoClip = !isNoClip;
+                Log("SYS", "Noclip: " + (isNoClip ? "ON" : "OFF"));
+                return;
+            }
+
+            if (text.Equals("rest", StringComparison.OrdinalIgnoreCase))
+            {
+                SendUserCommandRest();
+                return;
+            }
+            if (text.Equals("stand", StringComparison.OrdinalIgnoreCase))
+            {
+                SendUserCommandStand();
+                return;
+            }
+
+            if (text.StartsWith("cast ", StringComparison.OrdinalIgnoreCase))
+            {
+                string spellName = text[5..].Trim();
+                var spell = Data.AvatarSpells.GetItemByName(spellName, false);
+                if (spell != null)
+                {
+                    Log("SYS", $"Casting: {spell.ResourceName} (No Target)");
+                    SendReqCastMessage(spell.ObjectID);
+                }
+                else Log("ERROR", $"Unknown spell: {spellName}");
+                return;
+            }
+
+            if (text.StartsWith("say ", StringComparison.OrdinalIgnoreCase))
+            {
+                SendSayToMessage(ChatTransmissionType.Normal, text[4..].Trim());
+                return;
+            }
+
+            if (text.StartsWith("tell ", StringComparison.OrdinalIgnoreCase))
+            {
+                string[] parts = text[5..].Split(new[] { ' ' }, 2);
+                if (parts.Length == 2)
+                {
+                    Log("CHAT", $"You tell {parts[0]}: {parts[1]}");
+                    SendSayGroupMessage(0, parts[1]); 
+                }
+                return;
+            }
+
+            SendSayToMessage(ChatTransmissionType.Normal, text);
+        }
+
+        private bool DoFineStep(V2 direction, float worldDist)
         {
             var avatar = Data.AvatarObject;
             if (avatar == null || CurrentRoom == null) return false;
-
             var start2D = avatar.Position2D;
             var targetEnd = start2D + (direction * (Real)worldDist);
-
             var rooStart = avatar.Position3D.Clone();
             rooStart.ConvertToROO();
-            
-            // ROO coords are (World * 16) - 1024
-            var rooEnd2D = new Meridian59.Common.V2(targetEnd.X * 16.0f - 1024.0f, targetEnd.Y * 16.0f - 1024.0f);
-
+            var rooEnd2D = new V2(targetEnd.X * 16.0f - 1024.0f, targetEnd.Y * 16.0f - 1024.0f);
             var allowedROO = CurrentRoom.VerifyMove(ref rooStart, ref rooEnd2D, 50);
-
             if (allowedROO.LengthSquared < 0.000001f) return false;
-
-            // Apply movement (including any sliding from VerifyMove)
             allowedROO.Scale(0.0625f);
             var finalPos = start2D + allowedROO;
-            avatar.StartMoveTo(ref finalPos, 50);
+            avatar.Position3D = new V3(finalPos.X, avatar.Position3D.Y, finalPos.Y);
             avatar.UpdatePosition(10, Data.RoomInformation);
             return true;
         }
@@ -811,26 +1244,19 @@ namespace Meridian59.TuiClient
         {
             if (DateTime.Now < nextMoveAt) return;
             nextMoveAt = DateTime.Now.AddMilliseconds(100);
-
             var avatar = Data.AvatarObject;
             if (avatar == null) return;
-
-            // Only send a turn if the facing angle actually changed
             if (avatar.AngleUnits != angle)
             {
                 avatar.AngleUnits = angle;
                 SendReqTurnMessage(true);
             }
-
             if (isNoClip)
             {
-                // Noclip mode: Direct teleport (16 units)
                 ushort origX = avatar.CoordinateX;
                 ushort origY = avatar.CoordinateY;
-                ushort newX = (ushort)Math.Clamp((int)origX + dx * 16, 0, 65535);
-                ushort newY = (ushort)Math.Clamp((int)origY + dy * 16, 0, 65535);
-                avatar.CoordinateX = newX;
-                avatar.CoordinateY = newY;
+                avatar.CoordinateX = (ushort)Math.Clamp((int)origX + dx * 16, 0, 65535);
+                avatar.CoordinateY = (ushort)Math.Clamp((int)origY + dy * 16, 0, 65535);
                 byte origSpeed = (byte)avatar.HorizontalSpeed;
                 avatar.HorizontalSpeed = 16;
                 SendReqMoveMessage(true);
@@ -840,14 +1266,11 @@ namespace Meridian59.TuiClient
             }
             else
             {
-                var direction = new Meridian59.Common.V2(dx, dy);
-                if (direction.LengthSquared > 0.001f)
-                    direction.Normalize();
-
-                float remaining = 16.0f; // 1/4 tile per press
-                float stepSize = 4.0f;   // Start with 4-unit steps
+                var direction = new V2(dx, dy);
+                if (direction.LengthSquared > 0.001f) direction.Normalize();
+                float remaining = 16.0f; 
+                float stepSize = 4.0f;   
                 bool movedAtAll = false;
-
                 while (remaining > 0.01f)
                 {
                     float dist = Math.Min(remaining, stepSize);
@@ -858,33 +1281,17 @@ namespace Meridian59.TuiClient
                     }
                     else
                     {
-                        if (stepSize > 0.0625f)
-                        {
-                            stepSize = 0.0625f; // Drop to 1 legacy unit granularity
-                        }
-                        else
-                        {
-                            // Blocked even at finest granularity
-                            break;
-                        }
+                        if (stepSize > 0.0625f) stepSize = 0.0625f; 
+                        else break;
                     }
                 }
-
-                if (movedAtAll)
-                {
-                    // Immediately inform the server of the new position rather than waiting
-                    // for the base-class periodic send, which would leave timing gaps.
-                    SendReqMoveMessage(true);
-                }
+                if (movedAtAll) SendReqMoveMessage(true);
                 else
                 {
-                    // Check if we are at a room boundary or transition wall
                     bool atBoundary = false;
                     bool transitionWall = false;
-
                     if (CurrentRoom != null)
                     {
-                        // 1. Check physical room boundaries
                         if (CurrentRoom.Things.Count >= 2)
                         {
                             var box = CurrentRoom.GetBoundingBox2DFromThings();
@@ -892,114 +1299,135 @@ namespace Meridian59.TuiClient
                             float rooY = avatar.CoordinateY * 16f - 1024f;
                             float margin = 32.0f;
                             if (rooX < box.Min.X + margin || rooX > box.Max.X - margin ||
-                                rooY < box.Min.Y + margin || rooY > box.Max.Y - margin)
-                            {
-                                atBoundary = true;
-                            }
+                                rooY < box.Min.Y + margin || rooY > box.Max.Y - margin) atBoundary = true;
                         }
-
-                        // 2. Check for room exit walls (non-portal passable = boundary leading outside)
                         if (!atBoundary)
                         {
-                            var pos2D = new Meridian59.Common.V2(avatar.CoordinateX * 16f - 1024f, avatar.CoordinateY * 16f - 1024f);
+                            var pos2D = new V2(avatar.CoordinateX * 16f - 1024f, avatar.CoordinateY * 16f - 1024f);
                             foreach (var wall in CurrentRoom.Walls)
                             {
-                                bool isPortal = wall.LeftSectorNum != 0 && wall.RightSectorNum != 0;
                                 bool isPassable = (wall.LeftSide != null && wall.LeftSide.Flags.IsPassable) ||
                                                   (wall.RightSide != null && wall.RightSide.Flags.IsPassable);
-
-                                // Only match true room exits — non-portal passable walls.
-                                // Portal walls are internal sector boundaries; treating them as
-                                // transitions would bypass the slide code for most walls in the room.
-                                if (!isPortal && isPassable)
+                                if (isPassable)
                                 {
                                     int uc;
                                     var p1 = wall.P1;
                                     var p2 = wall.P2;
                                     double dist2 = (double)pos2D.MinSquaredDistanceToLineSegment(ref p1, ref p2, out uc);
-                                    if (dist2 < 4096.0) // 64^2 = 4096 (4 world units)
-                                    {
-                                        transitionWall = true;
-                                        break;
-                                    }
+                                    if (dist2 < 4096.0) { transitionWall = true; break; }
                                 }
                             }
                         }
                     }
-
-                    if (atBoundary || transitionWall)
-                    {
-                        Log("SYS", $"At {(atBoundary ? "boundary" : "transition wall")}. Triggering 'Go'...");
-                        SendReqGo(false);
-                    }
-                    else
-                    {
-                        // Not at boundary, just a regular wall. Try a small push to maybe slide.
-                        ushort origX = avatar.CoordinateX;
-                        ushort origY = avatar.CoordinateY;
-                        avatar.CoordinateX = (ushort)Math.Clamp((int)origX + dx * 2, 0, 65535);
-                        avatar.CoordinateY = (ushort)Math.Clamp((int)origY + dy * 2, 0, 65535);
-                        byte os = (byte)avatar.HorizontalSpeed;
-                        avatar.HorizontalSpeed = 16;
-                        SendReqMoveMessage(true);
-                        avatar.CoordinateX = origX;
-                        avatar.CoordinateY = origY;
-                        avatar.HorizontalSpeed = os;
-                        Log("SYS", "Wall collision. (Try 'noclip' if stuck)");
-                    }
+                    if (atBoundary || transitionWall) SendReqGo(true);
+                    else Log("SYS", "Wall collision. (Try 'noclip' if stuck)");
                 }
-
-                Log("DEBUG", $"Move Result: Pos=({avatar.CoordinateX},{avatar.CoordinateY})");
             }
-
-            if (isRecording)
-                recorder.Record("Move", avatar, $"X:{avatar.CoordinateX},Y:{avatar.CoordinateY},A:{angle}");
+            if (isRecording) recorder.Record("Move", avatar, $"X:{avatar.CoordinateX},Y:{avatar.CoordinateY},A:{angle}");
         }
 
-        public override void SendReqMoveMessage(bool ForceSend)
-        {
-            var avatar = Data.AvatarObject;
-            if (avatar != null)
-            {
-                Log("DEBUG", $"SendReqMoveMessage: Force={ForceSend} X={avatar.CoordinateX} Y={avatar.CoordinateY} SS={lastRoomID}");
-            }
-            base.SendReqMoveMessage(ForceSend);
-        }
+        public override void SendReqMoveMessage(bool ForceSend) => base.SendReqMoveMessage(ForceSend);
 
         public override void SendReqActivate()
         {
             var avatar = Data.AvatarObject;
             if (avatar == null) return;
-
-            // Find the nearest interactive object within a reasonable distance
-            Meridian59.Data.Models.RoomObject nearest = null;
-            double minDist = 128.0; // max distance to activate (standard is ~64-128)
-
+            RoomObject nearestObj = null;
+            double minDistObj = 128.0; 
             foreach (var obj in Data.RoomObjects)
             {
                 if (obj.ID == avatar.ID) continue;
-                
-                // Calculate 2D distance
-                double dx = obj.CoordinateX - avatar.CoordinateX;
-                double dy = obj.CoordinateY - avatar.CoordinateY;
-                double dist = Math.Sqrt(dx * dx + dy * dy);
-
-                if (dist < minDist)
+                double dist = Math.Sqrt(Math.Pow(obj.CoordinateX - avatar.CoordinateX, 2) + Math.Pow(obj.CoordinateY - avatar.CoordinateY, 2));
+                if (dist < minDistObj) { minDistObj = dist; nearestObj = obj; }
+            }
+            RooWall nearestWall = null;
+            double minDistWall = 64.0; 
+            if (CurrentRoom != null)
+            {
+                var pos2D = new V2(avatar.CoordinateX * 16f - 1024f, avatar.CoordinateY * 16f - 1024f);
+                foreach (var wall in CurrentRoom.Walls)
                 {
-                    minDist = dist;
-                    nearest = obj;
+                    int uc;
+                    var p1 = wall.P1;
+                    var p2 = wall.P2;
+                    double d2 = (double)pos2D.MinSquaredDistanceToLineSegment(ref p1, ref p2, out uc);
+                    if (d2 < minDistWall * minDistWall) { minDistWall = Math.Sqrt(d2); nearestWall = wall; }
                 }
             }
-
-            if (nearest != null)
+            if (nearestObj != null && minDistObj < minDistWall)
             {
-                Log("SYS", $"Activating: {nearest.Name} (ID: {nearest.ID})");
-                base.SendReqActivate(nearest.ID);
+                Log("SYS", $"Activating: {nearestObj.Name} (ID: {nearestObj.ID})");
+                base.SendReqActivate(nearestObj.ID);
             }
-            else
+            else if (nearestWall != null)
             {
-                // If no object, just call base which might use Highlighted if set by some other means
-                base.SendReqActivate();
+                var side = nearestWall.RightSide ?? nearestWall.LeftSide;
+                uint targetID = (side != null && side.ServerID != 0) 
+                    ? 0x80000000 | (uint)(ushort)side.ServerID 
+                    : 0x80000000 | (uint)(ushort)nearestWall.Num;
+                ServerConnection.SendQueue.Enqueue(new ReqUseMessage(targetID));
+            }
+            else base.SendReqActivate();
+        }
+
+        public override void SendReqGo(bool SendPositionBefore = true)
+        {
+            var avatar = Data.AvatarObject;
+            if (avatar != null && CurrentRoom != null)
+            {
+                var pos2D = new V2(avatar.CoordinateX * 16f - 1024f, avatar.CoordinateY * 16f - 1024f);
+                RooWall nearestWall = null;
+                double minDist2 = 128.0 * 128.0; 
+                V2 snapPoint = pos2D;
+                foreach (var wall in CurrentRoom.Walls)
+                {
+                    bool isPassable = (wall.LeftSide != null && wall.LeftSide.Flags.IsPassable) ||
+                                      (wall.RightSide != null && wall.RightSide.Flags.IsPassable);
+                    if (isPassable)
+                    {
+                        int uc;
+                        var p1 = wall.P1;
+                        var p2 = wall.P2;
+                        double d2 = (double)pos2D.MinSquaredDistanceToLineSegment(ref p1, ref p2, out uc);
+                        if (d2 < minDist2)
+                        {
+                            minDist2 = d2;
+                            nearestWall = wall;
+                            var wallVec = p2 - p1;
+                            var startToPos = pos2D - p1;
+                            snapPoint = p1 + startToPos.GetProjection(ref wallVec);
+                        }
+                    }
+                }
+                if (nearestWall != null)
+                {
+                    snapPoint.ConvertToWorld();
+                    avatar.Position3D = new V3(snapPoint.X, avatar.Position3D.Y, snapPoint.Y);
+                    avatar.UpdatePosition(10, Data.RoomInformation);
+                    SendPositionBefore = true;
+                }
+            }
+            base.SendReqGo(SendPositionBefore);
+        }
+
+        public void DrawInputField()
+        {
+            if (!HasTty) return;
+            int h = Console.WindowHeight;
+            lock (consoleLock)
+            {
+                Console.SetCursorPosition(2, h - 2);
+                if (inputMode)
+                {
+                    Console.ForegroundColor = ConsoleColor.Yellow;
+                    Console.Write(SafeLine("> " + inputBuffer.PadRight(75), 77));
+                }
+                else
+                {
+                    Console.ForegroundColor = ConsoleColor.DarkGray;
+                    Console.Write(SafeLine("  (Press Enter to chat)  ".PadRight(77), 77));
+                }
+                Console.ResetColor();
             }
         }
 
@@ -1008,13 +1436,6 @@ namespace Meridian59.TuiClient
             base.SendActionMessage(Action);
             if (isRecording && Data.AvatarObject != null)
                 recorder.Record("Action", Data.AvatarObject, Action.ToString());
-        }
-
-        public override void SendSayToMessage(ChatTransmissionType Type, string Text)
-        {
-            base.SendSayToMessage(Type, Text);
-            if (isRecording)
-                recorder.Record("Said", Data.AvatarObject, $"{Type}:{Text}");
         }
 
         public override void SendSayGroupMessage(uint TargetID, string Text)

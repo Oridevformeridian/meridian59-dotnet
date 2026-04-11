@@ -20,14 +20,14 @@ using Meridian59.Protocol.Enums;
 
 namespace Meridian59.Protocol.GameMessages
 {
-    public class SectorLightMessage : GameModeMessage
+    public class SetViewMessage : GameModeMessage
     {       
         #region IByteSerializable implementation
         public override int ByteLength
         {
             get
             {
-                return base.ByteLength + TypeSizes.SHORT + TypeSizes.BYTE;
+                return base.ByteLength + TypeSizes.INT + TypeSizes.INT + TypeSizes.INT + TypeSizes.BYTE;
             }
         }
 
@@ -37,10 +37,16 @@ namespace Meridian59.Protocol.GameMessages
 
             cursor += base.WriteTo(Buffer, cursor);
             
-            Array.Copy(BitConverter.GetBytes(SectorNum), 0, Buffer, cursor, TypeSizes.SHORT);
-            cursor += TypeSizes.SHORT;
+            Array.Copy(BitConverter.GetBytes(ObjectID), 0, Buffer, cursor, TypeSizes.INT);
+            cursor += TypeSizes.INT;
 
-            Buffer[cursor] = LightType;
+            Array.Copy(BitConverter.GetBytes(ViewFlags), 0, Buffer, cursor, TypeSizes.INT);
+            cursor += TypeSizes.INT;
+
+            Array.Copy(BitConverter.GetBytes(ViewHeight), 0, Buffer, cursor, TypeSizes.INT);
+            cursor += TypeSizes.INT;
+
+            Buffer[cursor] = ViewLight;
             cursor++;
                   
             return cursor - StartIndex;
@@ -52,27 +58,37 @@ namespace Meridian59.Protocol.GameMessages
 
             cursor += base.ReadFrom(Buffer, cursor);
 
-            SectorNum = BitConverter.ToUInt16(Buffer, cursor);
-            cursor += TypeSizes.SHORT;
+            ObjectID = BitConverter.ToUInt32(Buffer, cursor);
+            cursor += TypeSizes.INT;
 
-            LightType = Buffer[cursor];
+            ViewFlags = BitConverter.ToInt32(Buffer, cursor);
+            cursor += TypeSizes.INT;
+
+            ViewHeight = BitConverter.ToInt32(Buffer, cursor);
+            cursor += TypeSizes.INT;
+
+            ViewLight = Buffer[cursor];
             cursor++;
           
             return cursor - StartIndex;
         }
         #endregion
 
-        public ushort SectorNum { get; set; }
-        public byte LightType { get; set; }
+        public uint ObjectID { get; set; }
+        public int ViewFlags { get; set; }
+        public int ViewHeight { get; set; }
+        public byte ViewLight { get; set; }
 
-        public SectorLightMessage(ushort SectorNum, byte LightType) 
-            : base(MessageTypeGameMode.SectorLight)
+        public SetViewMessage(uint ObjectID, int ViewFlags, int ViewHeight, byte ViewLight) 
+            : base(MessageTypeGameMode.SetView)
         {
-            this.SectorNum = SectorNum;
-            this.LightType = LightType;
+            this.ObjectID = ObjectID;
+            this.ViewFlags = ViewFlags;
+            this.ViewHeight = ViewHeight;
+            this.ViewLight = ViewLight;
         }
 
-        public SectorLightMessage(byte[] Buffer, int StartIndex = 0) 
+        public SetViewMessage(byte[] Buffer, int StartIndex = 0) 
             : base (Buffer, StartIndex) { }
     }
 }

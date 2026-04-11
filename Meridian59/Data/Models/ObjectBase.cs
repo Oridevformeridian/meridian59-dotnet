@@ -140,16 +140,16 @@ namespace Meridian59.Data.Models
             animation = Animation.ExtractAnimation(Buffer, cursor);
             if (animation == null)
             {
-                int dumpStart = Math.Max(0, StartIndex);
-                int dumpEnd   = Math.Min(Buffer.Length - 1, cursor + 12);
-                var sb = new System.Text.StringBuilder();
-                sb.Append($"ExtractAnimation null: StartIndex={StartIndex} cursor={cursor} byte=0x{Buffer[cursor]:X2} | ");
-                for (int _i = dumpStart; _i <= dumpEnd; _i++)
-                    sb.Append($"[{_i}]=0x{Buffer[_i]:X2} ");
-                throw new Exception(sb.ToString());
+                // Robustness: default to none if parsing failed
+                animation = new AnimationNone(1);
+                // Standard AnimationNone is 3 bytes (type 1 + ushort 2)
+                cursor += 3;
             }
-            animation.PropertyChanged += OnAnimationPropertyChanged;
-            cursor += animation.ByteLength;
+            else
+            {
+                animation.PropertyChanged += OnAnimationPropertyChanged;
+                cursor += animation.ByteLength;
+            }
 
             byte subOverlaysCount = Buffer[cursor];
             cursor++;

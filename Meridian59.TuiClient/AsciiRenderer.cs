@@ -79,157 +79,165 @@ namespace Meridian59.TuiClient
         {
             if (width <= 0 || height <= 0) return;
 
-            // Recreate buffers if size changed or Invalidate() was called.
-            if (nextBuffer == null || width != lastWidth || height != lastHeight)
+            try
             {
-                currentBuffer = new VideoBuffer(width, height);
-                nextBuffer    = new VideoBuffer(width, height);
-                lastWidth     = width;
-                lastHeight    = height;
-
-                for (int x = 0; x < width; x++)
-                    for (int y = 0; y < height; y++)
-                        currentBuffer.Cells[x, y].Char = '\0';
-            }
-
-            // Build next frame
-            nextBuffer.Clear();
-
-            var data   = client.Data;
-            var avatar = data?.AvatarObject;
-            var roo    = data?.RoomInformation?.ResourceRoom;
-
-            // 1. Draw status at the top
-            string status;
-            if (data?.RoomInformation == null) status = "WAITING FOR ROOM...";
-            else if (roo == null) status = $"LOADING: {data.RoomInformation.RoomFile}";
-            else status = $"ROOM: {roo.Filename} WALLS: {roo.Walls.Count} OBJ: {data.RoomObjects.Count}";
-            
-            for (int i = 0; i < status.Length && i < width; i++)
-                nextBuffer.Set(i, 0, status[i]);
-
-            // 2. Determine center point (player or world origin)
-            int centerX = 64512;
-            int centerY = 64512;
-            float viewAngle = 0;
-
-            if (avatar != null)
-            {
-                centerX = (int)Math.Round((avatar.CoordinateX * 16f) - 1024f);
-                centerY = (int)Math.Round((avatar.CoordinateY * 16f) - 1024f);
-                // Convert Meridian angle (0-4095) to radians (0 to 2PI)
-                // 0 is East, 1024 is South, 2048 is West, 3072 is North
-                viewAngle = (float)(avatar.AngleUnits * 2.0 * Math.PI / 4096.0);
-            }
-
-            // Compute scale
-            float fitRooToGrid = 1024f;
-            if (roo != null && roo.Walls.Count > 0)
-            {
-                float minX = float.MaxValue, maxX = float.MinValue;
-                float minY = float.MaxValue, maxY = float.MinValue;
-                foreach (var w in roo.Walls)
+                // Recreate buffers if size changed or Invalidate() was called.
+                if (nextBuffer == null || width != lastWidth || height != lastHeight)
                 {
-                    if (w.P1.X < minX) minX = (float)w.P1.X;
-                    if (w.P2.X < minX) minX = (float)w.P2.X;
-                    if (w.P1.X > maxX) maxX = (float)w.P1.X;
-                    if (w.P2.X > maxX) maxX = (float)w.P2.X;
-                    if (w.P1.Y < minY) minY = (float)w.P1.Y;
-                    if (w.P2.Y < minY) minY = (float)w.P2.Y;
-                    if (w.P1.Y > maxY) maxY = (float)w.P1.Y;
-                    if (w.P2.Y > maxY) maxY = (float)w.P2.Y;
+                    currentBuffer = new VideoBuffer(width, height);
+                    nextBuffer    = new VideoBuffer(width, height);
+                    lastWidth     = width;
+                    lastHeight    = height;
+
+                    for (int x = 0; x < width; x++)
+                        for (int y = 0; y < height; y++)
+                            currentBuffer.Cells[x, y].Char = '\0';
                 }
-                fitRooToGrid = Math.Max((maxX - minX) / Math.Max(1, width - 2), (maxY - minY) / Math.Max(1, height - 2));
-            }
-            float rooToGrid = fitRooToGrid / MathF.Pow(2f, zoomLevel);
 
-            // 3. Draw all walls
-            if (roo != null)
-            {
-                foreach (var wall in roo.Walls)
+                // Build next frame
+                nextBuffer.Clear();
+
+                var data   = client.Data;
+                var avatar = data?.AvatarObject;
+                var roo    = data?.RoomInformation?.ResourceRoom;
+
+                // 1. Draw status at the top
+                string status;
+                if (data?.RoomInformation == null) status = "WAITING FOR ROOM...";
+                else if (roo == null) status = $"LOADING: {data.RoomInformation.RoomFile}";
+                else status = $"ROOM: {roo.Filename} WALLS: {roo.Walls.Count} OBJ: {data.RoomObjects.Count}";
+                
+                for (int i = 0; i < status.Length && i < width; i++)
+                    nextBuffer.Set(i, 0, status[i]);
+
+                // 2. Determine center point (player or world origin)
+                int centerX = 64512;
+                int centerY = 64512;
+                float viewAngle = 0;
+
+                if (avatar != null)
                 {
-                    int x0 = (int)Math.Round((wall.P1.X - centerX) / rooToGrid) + width / 2;
-                    int y0 = -(int)Math.Round((wall.P1.Y - centerY) / rooToGrid) + height / 2;
-                    int x1 = (int)Math.Round((wall.P2.X - centerX) / rooToGrid) + width / 2;
-                    int y1 = -(int)Math.Round((wall.P2.Y - centerY) / rooToGrid) + height / 2;
+                    centerX = (int)Math.Round((avatar.CoordinateX * 16f) - 1024f);
+                    centerY = (int)Math.Round((avatar.CoordinateY * 16f) - 1024f);
+                    // Convert Meridian angle (0-4095) to radians (0 to 2PI)
+                    // 0 is East, 1024 is South, 2048 is West, 3072 is North
+                    // Standard math is CCW, M59 is CW. 
+                    viewAngle = (float)(avatar.AngleUnits * 2.0 * Math.PI / 4096.0);
+                }
 
-                    char symbol = '#';
-                    bool isPortal = wall.LeftSectorNum != 0 && wall.RightSectorNum != 0;
-                    bool isPassable = (wall.LeftSide != null && wall.LeftSide.Flags.IsPassable) || 
-                                      (wall.RightSide != null && wall.RightSide.Flags.IsPassable);
-
-                    if (isPortal)
+                // Compute scale
+                float fitRooToGrid = 1024f;
+                if (roo != null && roo.Walls.Count > 0)
+                {
+                    float minX = float.MaxValue, maxX = float.MinValue;
+                    float minY = float.MaxValue, maxY = float.MinValue;
+                    foreach (var w in roo.Walls)
                     {
-                        symbol = '.'; // Portal
-                        if (!isPassable)
-                            symbol = 'D'; // Closed door
-                        else if (wall.LeftSide?.Flags.IsHasAnimated == true || wall.RightSide?.Flags.IsHasAnimated == true)
-                            symbol = 'd'; // Open/Animated door
+                        if (w.P1.X < minX) minX = (float)w.P1.X;
+                        if (w.P2.X < minX) minX = (float)w.P2.X;
+                        if (w.P1.X > maxX) maxX = (float)w.P1.X;
+                        if (w.P2.X > maxX) maxX = (float)w.P2.X;
+                        if (w.P1.Y < minY) minY = (float)w.P1.Y;
+                        if (w.P2.Y < minY) minY = (float)w.P2.Y;
+                        if (w.P1.Y > maxY) maxY = (float)w.P1.Y;
+                        if (w.P2.Y > maxY) maxY = (float)w.P2.Y;
                     }
-                    else if (isPassable)
+                    fitRooToGrid = Math.Max((maxX - minX) / Math.Max(1, width - 2), (maxY - minY) / Math.Max(1, height - 2));
+                }
+                float rooToGrid = fitRooToGrid / MathF.Pow(2f, zoomLevel);
+
+                // 3. Draw all walls
+                if (roo != null)
+                {
+                    foreach (var wall in roo.Walls)
                     {
-                        symbol = 'X'; // Exit / Boundary Transition
+                        int x0 = (int)Math.Round((wall.P1.X - centerX) / rooToGrid) + width / 2;
+                        int y0 = -(int)Math.Round((wall.P1.Y - centerY) / rooToGrid) + height / 2;
+                        int x1 = (int)Math.Round((wall.P2.X - centerX) / rooToGrid) + width / 2;
+                        int y1 = -(int)Math.Round((wall.P2.Y - centerY) / rooToGrid) + height / 2;
+
+                        char symbol = '#';
+                        bool isPortal = wall.LeftSectorNum != 0 && wall.RightSectorNum != 0;
+                        bool isPassable = (wall.LeftSide != null && wall.LeftSide.Flags.IsPassable) || 
+                                          (wall.RightSide != null && wall.RightSide.Flags.IsPassable);
+
+                        if (isPortal)
+                        {
+                            symbol = '.'; // Portal
+                            if (!isPassable)
+                                symbol = 'D'; // Closed door
+                            else if (wall.LeftSide?.Flags.IsHasAnimated == true || wall.RightSide?.Flags.IsHasAnimated == true)
+                                symbol = 'd'; // Open/Animated door
+                        }
+                        else if (isPassable)
+                        {
+                            symbol = 'X'; // Exit / Boundary Transition
+                        }
+                        
+                        DrawLine(nextBuffer, x0, y0, x1, y1, symbol);
                     }
-                    
-                    DrawLine(nextBuffer, x0, y0, x1, y1, symbol);
-                }
 
-                // Draw room boundaries from Things[0] and Things[1]
-                if (roo.Things.Count >= 2)
-                {
-                    var box = roo.GetBoundingBox2DFromThings();
-                    int bx0 = (int)Math.Round((box.Min.X - centerX) / rooToGrid) + width / 2;
-                    int by0 = -(int)Math.Round((box.Min.Y - centerY) / rooToGrid) + height / 2;
-                    int bx1 = (int)Math.Round((box.Max.X - centerX) / rooToGrid) + width / 2;
-                    int by1 = -(int)Math.Round((box.Max.Y - centerY) / rooToGrid) + height / 2;
-
-                    // Draw boundary box with 'B' at corners
-                    nextBuffer.Set(bx0, by0, 'B');
-                    nextBuffer.Set(bx1, by0, 'B');
-                    nextBuffer.Set(bx0, by1, 'B');
-                    nextBuffer.Set(bx1, by1, 'B');
-                }
-            }
-
-            // 4. Place objects
-            if (data != null)
-            {
-                foreach (var obj in data.RoomObjects)
-                {
-                    float objRooX = obj.CoordinateX * 16f - 1024f;
-                    float objRooY = obj.CoordinateY * 16f - 1024f;
-                    int relX = (int)Math.Round((objRooX - centerX) / rooToGrid) + width / 2;
-                    int relY = -(int)Math.Round((objRooY - centerY) / rooToGrid) + height / 2;
-
-                    if (relX >= 0 && relX < width && relY >= 1 && relY < height)
-                        nextBuffer.Set(relX, relY, GetCharForObject(obj));
-                }
-            }
-
-            // 5. Draw Avatar
-            nextBuffer.Set(width / 2, height / 2, avatar != null ? '@' : '+');
-
-            // 6. Apply Post-processing (Lighting and Vision Cone)
-            ApplyLighting(nextBuffer, width / 2, height / 2, viewAngle);
-
-            // 7. Diff-paint to console
-            for (int y = 0; y < height; y++)
-            {
-                for (int x = 0; x < width; x++)
-                {
-                    var next = nextBuffer.Cells[x, y];
-                    var curr = currentBuffer.Cells[x, y];
-
-                    // Character transformation based on intensity
-                    char displayChar = TransformChar(next.Char, next.Intensity);
-
-                    if (displayChar != curr.Char)
+                    // Draw room boundaries
+                    if (roo.Things.Count >= 2)
                     {
-                        Console.SetCursorPosition(consoleX + x, consoleY + y);
-                        Console.Write(displayChar);
-                        currentBuffer.Cells[x, y].Char = displayChar;
+                        var box = roo.GetBoundingBox2DFromThings();
+                        int bx0 = (int)Math.Round((box.Min.X - centerX) / rooToGrid) + width / 2;
+                        int by0 = -(int)Math.Round((box.Min.Y - centerY) / rooToGrid) + height / 2;
+                        int bx1 = (int)Math.Round((box.Max.X - centerX) / rooToGrid) + width / 2;
+                        int by1 = -(int)Math.Round((box.Max.Y - centerY) / rooToGrid) + height / 2;
+
+                        // Draw boundary box with 'B' at corners
+                        nextBuffer.Set(bx0, by0, 'B');
+                        nextBuffer.Set(bx1, by0, 'B');
+                        nextBuffer.Set(bx0, by1, 'B');
+                        nextBuffer.Set(bx1, by1, 'B');
                     }
                 }
+
+                // 4. Place objects
+                if (data != null)
+                {
+                    foreach (var obj in data.RoomObjects)
+                    {
+                        float objRooX = obj.CoordinateX * 16f - 1024f;
+                        float objRooY = obj.CoordinateY * 16f - 1024f;
+                        int relX = (int)Math.Round((objRooX - centerX) / rooToGrid) + width / 2;
+                        int relY = -(int)Math.Round((objRooY - centerY) / rooToGrid) + height / 2;
+
+                        if (relX >= 0 && relX < width && relY >= 1 && relY < height)
+                            nextBuffer.Set(relX, relY, GetCharForObject(obj));
+                    }
+                }
+
+                // 5. Draw Avatar
+                nextBuffer.Set(width / 2, height / 2, avatar != null ? '@' : '+');
+
+                // 6. Apply Post-processing (Lighting and Vision Cone)
+                ApplyLighting(nextBuffer, width / 2, height / 2, viewAngle);
+
+                // 7. Diff-paint to console
+                for (int y = 0; y < height; y++)
+                {
+                    for (int x = 0; x < width; x++)
+                    {
+                        var next = nextBuffer.Cells[x, y];
+                        var curr = currentBuffer.Cells[x, y];
+
+                        // Character transformation based on intensity
+                        char displayChar = TransformChar(next.Char, next.Intensity);
+
+                        if (displayChar != curr.Char)
+                        {
+                            Console.SetCursorPosition(consoleX + x, consoleY + y);
+                            Console.Write(displayChar);
+                            currentBuffer.Cells[x, y].Char = displayChar;
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                client.Log("ERROR", $"Renderer failure: {ex.Message}");
             }
         }
 
@@ -252,7 +260,8 @@ namespace Meridian59.TuiClient
                     if (dist > 1.0f)
                     {
                         float angle = MathF.Atan2(dy, dx);
-                        float diff = MathF.Abs(NormalizeAngle(angle - viewAngle));
+                        // Standard math is CCW, viewAngle is CW. Summing them should cancel the flip.
+                        float diff = MathF.Abs(NormalizeAngle(angle + viewAngle));
                         if (diff > MathF.PI / 4.0f) // 45 degrees either side
                         {
                             intensity *= 0.4f; // Dim areas outside vision cone
