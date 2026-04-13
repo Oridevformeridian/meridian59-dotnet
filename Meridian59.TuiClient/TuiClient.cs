@@ -93,7 +93,7 @@ namespace Meridian59.TuiClient
         public bool NoAutoexec { get; set; } = false;
 
         // Layout constants
-        private const int LOG_FIRST_ROW = 4;  // first row of the log area (row 0-3 are stats)
+        private const int LOG_FIRST_ROW = 5;  // first row of the log area (row 0-4 are stats/borders)
         private const int LEFT_PANEL_WIDTH = 78; // printable cols inside left panel (cols 1..78)
 
         public TuiClient() : base()
@@ -273,9 +273,11 @@ namespace Meridian59.TuiClient
 
             string cmd = scriptQueue.Dequeue();
             
-            if (cmd.StartsWith("wait ", StringComparison.OrdinalIgnoreCase))
+            if (cmd.StartsWith("wait ", StringComparison.OrdinalIgnoreCase) || 
+                cmd.StartsWith("sleep ", StringComparison.OrdinalIgnoreCase))
             {
-                if (int.TryParse(cmd.Substring(5), out int ms))
+                int spaceIdx = cmd.IndexOf(' ');
+                if (int.TryParse(cmd.Substring(spaceIdx + 1), out int ms))
                 {
                     nextScriptCommandTime = DateTime.Now.AddMilliseconds(ms);
                     return;
@@ -289,6 +291,16 @@ namespace Meridian59.TuiClient
             {
                 ProcessCommand(cmd);
             }
+        }
+
+        protected override void HandleCharactersMessage(CharactersMessage Message)
+        {
+            Log("SYS", $"Received character list ({Message.WelcomeInfo.Characters.Count} characters).");
+            foreach (var character in Message.WelcomeInfo.Characters)
+            {
+                Log("SYS", $"Account Character: {character.Name} (ID: {character.ID})");
+            }
+            base.HandleCharactersMessage(Message);
         }
 
         protected override void HandleGameModeMessage(GameModeMessage Message)
