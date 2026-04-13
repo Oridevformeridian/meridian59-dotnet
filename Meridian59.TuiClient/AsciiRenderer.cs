@@ -82,13 +82,13 @@ namespace Meridian59.TuiClient
         private uint lastRoomId = 0;
         private float cachedFitRooToGrid = 1024f;
 
-        public ViewOrientation Orientation { get; set; } = ViewOrientation.NorthUp;
+        public ViewOrientation Orientation { get; set; } = ViewOrientation.SouthUp;
 
         public void CycleOrientation()
         {
-            if (Orientation == ViewOrientation.NorthUp) Orientation = ViewOrientation.SouthUp;
-            else if (Orientation == ViewOrientation.SouthUp) Orientation = ViewOrientation.FollowRotation;
-            else Orientation = ViewOrientation.NorthUp;
+            if (Orientation == ViewOrientation.SouthUp) Orientation = ViewOrientation.NorthUp;
+            else if (Orientation == ViewOrientation.NorthUp) Orientation = ViewOrientation.FollowRotation;
+            else Orientation = ViewOrientation.SouthUp;
         }
 
         public void ZoomIn()  { if (zoomLevel < ZOOM_MAX) zoomLevel++; }
@@ -175,16 +175,20 @@ namespace Meridian59.TuiClient
                 float rotationAngle = 0; 
                 if (Orientation == ViewOrientation.FollowRotation && avatar != null)
                 {
-                    // To have player facing "Up" (-Y in terminal, North in M59), 
-                    // we need to rotate the world by (-avatarAngle + PI/2)
-                    rotationAngle = -avatarAngle + (float)(Math.PI * 1.5); // Adjusting for M59 3072 being North
+                    // To have player facing "Up" (-Y in terminal)
+                    rotationAngle = -avatarAngle + (float)(Math.PI * 1.5); 
+                }
+                else if (Orientation == ViewOrientation.NorthUp)
+                {
+                    rotationAngle = (float)Math.PI; // North at Top
                 }
                 else if (Orientation == ViewOrientation.SouthUp)
                 {
-                    rotationAngle = (float)Math.PI; // Upside down
+                    rotationAngle = 0; // South at Top
                 }
 
                 cosTheta = MathF.Cos(rotationAngle);
+                sinTheta = MathF.Sin(rotationAngle);
                 sinTheta = MathF.Sin(rotationAngle);
 
                 // Compute scale (cached)

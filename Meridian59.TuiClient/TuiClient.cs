@@ -1308,7 +1308,7 @@ namespace Meridian59.TuiClient
 
             if (renderer.Orientation == ViewOrientation.FollowRotation)
             {
-                // In M59, AngleUnits are 0-4095 CW: 0=East, 1024=South, 2048=West, 3072=North
+                // Relative movement
                 float avatarRad = (float)(Data.AvatarObject.AngleUnits * 2.0 * Math.PI / 4096.0);
                 float cos = MathF.Cos(avatarRad);
                 float sin = MathF.Sin(avatarRad);
@@ -1320,23 +1320,27 @@ namespace Meridian59.TuiClient
             }
             else if (renderer.Orientation == ViewOrientation.SouthUp)
             {
-                // Upside down: Inverting both axes
+                // SouthUp: South is at Top. Original map behavior.
+                // Pressing Up (dy=-1) moves towards Top (South).
+                // South is -Y in world (if +Y is North).
                 ushort angle = 0;
-                if (dx == 1) angle = 2048;      // Move East (Right) -> World West
-                else if (dx == -1) angle = 0;   // Move West (Left) -> World East
-                else if (dy == 1) angle = 3072; // Move South (Down) -> World North
-                else if (dy == -1) angle = 1024;// Move North (Up) -> World South
-                Move(-dx, -dy, angle);
+                if (dx == 1) angle = 2048;      // Right -> West
+                else if (dx == -1) angle = 0;   // Left -> East
+                else if (dy == 1) angle = 3072; // Down -> North
+                else if (dy == -1) angle = 1024;// Up -> South
+                Move(-dx, dy, angle); // dx flipped (East is Left), dy preserved (Up moves South)
             }
             else
             {
-                // Absolute North-up movement
+                // NorthUp: North is at Top.
+                // Pressing Up (dy=-1) moves towards Top (North).
+                // North is +Y in world.
                 ushort angle = 0;
-                if (dx == 1) angle = 0;
-                else if (dx == -1) angle = 2048;
-                else if (dy == 1) angle = 1024;
-                else if (dy == -1) angle = 3072;
-                Move(dx, dy, angle);
+                if (dx == 1) angle = 0;        // Right -> East
+                else if (dx == -1) angle = 2048; // Left -> West
+                else if (dy == 1) angle = 1024;  // Down -> South
+                else if (dy == -1) angle = 3072; // Up -> North
+                Move(dx, -dy, angle); // dx preserved (East is Right), dy flipped (Up moves North)
             }
         }
 
