@@ -2,7 +2,7 @@
 <configuration>
   <resources
     version="10016"
-    path="../../../../Resources/"
+    path="Resources"
     preloadrooms="false"
     preloadobjects="false"
     preloadroomtextures="false"
@@ -31,4 +31,30 @@
 
   <admins>
   </admins>
+
+  <keymap>
+    <bind key="UpArrow" action="MoveNorth" />
+    <bind key="DownArrow" action="MoveSouth" />
+    <bind key="LeftArrow" action="MoveWest" />
+    <bind key="RightArrow" action="MoveEast" />
+    <bind key="W" action="MoveNorth" />
+    <bind key="S" action="MoveSouth" />
+    <bind key="A" action="MoveWest" />
+    <bind key="D" action="MoveEast" />
+    <bind key="Spacebar" action="Use" />
+    <bind key="Q" action="Quit" />
+    <bind key="Add" action="ZoomIn" />
+    <bind key="OemPlus" action="ZoomIn" />
+    <bind key="Subtract" action="ZoomOut" />
+    <bind key="OemMinus" action="ZoomOut" />
+    <bind key="R" action="ToggleRotation" />
+    <bind key="PageUp" action="ScrollUp" />
+    <bind key="PageDown" action="ScrollDown" />
+    <bind key="Enter" action="EnterChat" />
+    <bind key="G" action="ManualGo" />
+    <!-- Example hotkeys -->
+    <bind key="D1" action="Hotkey1" />
+    <bind key="D2" action="Hotkey2" />
+    <bind key="M" action="Mail" />
+  </keymap>
 </configuration>
