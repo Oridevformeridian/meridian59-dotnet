@@ -50,6 +50,13 @@ namespace Meridian59.TuiClient
         }
     }
 
+    public enum ViewOrientation
+    {
+        NorthUp,
+        SouthUp,
+        FollowRotation
+    }
+
     public class AsciiRenderer
     {
         private VideoBuffer currentBuffer;
@@ -63,6 +70,27 @@ namespace Meridian59.TuiClient
         private const int ZOOM_MAX = 7;
         private const int ZOOM_MIN = -2;
 
+        // Transformation State
+        private float cosTheta = 1.0f;
+        private float sinTheta = 0.0f;
+        private float rooToGrid = 1.0f;
+        private int centerX = 64512;
+        private int centerY = 64512;
+        private int viewWidth = 0;
+        private int viewHeight = 0;
+
+        private uint lastRoomId = 0;
+        private float cachedFitRooToGrid = 1024f;
+
+        public ViewOrientation Orientation { get; set; } = ViewOrientation.NorthUp;
+
+        public void CycleOrientation()
+        {
+            if (Orientation == ViewOrientation.NorthUp) Orientation = ViewOrientation.SouthUp;
+            else if (Orientation == ViewOrientation.SouthUp) Orientation = ViewOrientation.FollowRotation;
+            else Orientation = ViewOrientation.NorthUp;
+        }
+
         public void ZoomIn()  { if (zoomLevel < ZOOM_MAX) zoomLevel++; }
         public void ZoomOut() { if (zoomLevel > ZOOM_MIN) zoomLevel--; }
 
@@ -73,6 +101,22 @@ namespace Meridian59.TuiClient
         {
             currentBuffer = null;
             nextBuffer    = null;
+            lastRoomId    = 0;
+        }
+
+        private void WorldToView(float worldX, float worldY, out int viewX, out int viewY)
+        {
+            // 1. Translate
+            float tx = worldX - centerX;
+            float ty = worldY - centerY;
+
+            // 2. Rotate
+            float rx = tx * cosTheta - ty * sinTheta;
+            float ry = tx * sinTheta + ty * cosTheta;
+
+            // 3. Scale and Center in viewport
+            viewX = (int)Math.Round(rx / rooToGrid) + viewWidth / 2;
+            viewY = (int)Math.Round(ry / rooToGrid) + viewHeight / 2;
         }
 
         public void Render(TuiClient client, int consoleX, int consoleY, int width, int height)
@@ -94,6 +138,9 @@ namespace Meridian59.TuiClient
                             currentBuffer.Cells[x, y].Char = '\0';
                 }
 
+                viewWidth = width;
+                viewHeight = height;
+
                 // Build next frame
                 nextBuffer.Clear();
 
@@ -110,10 +157,10 @@ namespace Meridian59.TuiClient
                 for (int i = 0; i < status.Length && i < width; i++)
                     nextBuffer.Set(i, 0, status[i]);
 
-                // 2. Determine center point (player or world origin)
-                int centerX = 64512;
-                int centerY = 64512;
-                float viewAngle = 0;
+                // 2. Determine center point and orientation
+                centerX = 64512;
+                centerY = 64512;
+                float avatarAngle = 0;
 
                 if (avatar != null)
                 {
@@ -121,40 +168,57 @@ namespace Meridian59.TuiClient
                     centerY = (int)Math.Round((avatar.CoordinateY * 16f) - 1024f);
                     // Convert Meridian angle (0-4095) to radians (0 to 2PI)
                     // 0 is East, 1024 is South, 2048 is West, 3072 is North
-                    // Standard math is CCW, M59 is CW. 
-                    viewAngle = (float)(avatar.AngleUnits * 2.0 * Math.PI / 4096.0);
+                    avatarAngle = (float)(avatar.AngleUnits * 2.0 * Math.PI / 4096.0);
                 }
 
-                // Compute scale
-                float fitRooToGrid = 1024f;
+                // Orientation setup
+                float rotationAngle = 0; 
+                if (Orientation == ViewOrientation.FollowRotation && avatar != null)
+                {
+                    // To have player facing "Up" (-Y in terminal, North in M59), 
+                    // we need to rotate the world by (-avatarAngle + PI/2)
+                    rotationAngle = -avatarAngle + (float)(Math.PI * 1.5); // Adjusting for M59 3072 being North
+                }
+                else if (Orientation == ViewOrientation.SouthUp)
+                {
+                    rotationAngle = (float)Math.PI; // Upside down
+                }
+
+                cosTheta = MathF.Cos(rotationAngle);
+                sinTheta = MathF.Sin(rotationAngle);
+
+                // Compute scale (cached)
                 if (roo != null && roo.Walls.Count > 0)
                 {
-                    float minX = float.MaxValue, maxX = float.MinValue;
-                    float minY = float.MaxValue, maxY = float.MinValue;
-                    foreach (var w in roo.Walls)
+                    if (client.Data.RoomInformation.RoomID != lastRoomId)
                     {
-                        if (w.P1.X < minX) minX = (float)w.P1.X;
-                        if (w.P2.X < minX) minX = (float)w.P2.X;
-                        if (w.P1.X > maxX) maxX = (float)w.P1.X;
-                        if (w.P2.X > maxX) maxX = (float)w.P2.X;
-                        if (w.P1.Y < minY) minY = (float)w.P1.Y;
-                        if (w.P2.Y < minY) minY = (float)w.P2.Y;
-                        if (w.P1.Y > maxY) maxY = (float)w.P1.Y;
-                        if (w.P2.Y > maxY) maxY = (float)w.P2.Y;
+                        float minX = float.MaxValue, maxX = float.MinValue;
+                        float minY = float.MaxValue, maxY = float.MinValue;
+                        foreach (var w in roo.Walls)
+                        {
+                            minX = Math.Min(minX, Math.Min((float)w.P1.X, (float)w.P2.X));
+                            maxX = Math.Max(maxX, Math.Max((float)w.P1.X, (float)w.P2.X));
+                            minY = Math.Min(minY, Math.Min((float)w.P1.Y, (float)w.P2.Y));
+                            maxY = Math.Max(maxY, Math.Max((float)w.P1.Y, (float)w.P2.Y));
+                        }
+                        cachedFitRooToGrid = Math.Max((maxX - minX) / Math.Max(1, width - 2), (maxY - minY) / Math.Max(1, height - 2));
+                        lastRoomId = client.Data.RoomInformation.RoomID;
                     }
-                    fitRooToGrid = Math.Max((maxX - minX) / Math.Max(1, width - 2), (maxY - minY) / Math.Max(1, height - 2));
                 }
-                float rooToGrid = fitRooToGrid / MathF.Pow(2f, zoomLevel);
+                else
+                {
+                    cachedFitRooToGrid = 1024f;
+                    lastRoomId = 0;
+                }
+                rooToGrid = cachedFitRooToGrid / MathF.Pow(2f, zoomLevel);
 
                 // 3. Draw all walls
                 if (roo != null)
                 {
                     foreach (var wall in roo.Walls)
                     {
-                        int x0 = (int)Math.Round((wall.P1.X - centerX) / rooToGrid) + width / 2;
-                        int y0 = -(int)Math.Round((wall.P1.Y - centerY) / rooToGrid) + height / 2;
-                        int x1 = (int)Math.Round((wall.P2.X - centerX) / rooToGrid) + width / 2;
-                        int y1 = -(int)Math.Round((wall.P2.Y - centerY) / rooToGrid) + height / 2;
+                        WorldToView((float)wall.P1.X, (float)wall.P1.Y, out int x0, out int y0);
+                        WorldToView((float)wall.P2.X, (float)wall.P2.Y, out int x1, out int y1);
 
                         char symbol = '#';
                         bool isPortal = wall.LeftSectorNum != 0 && wall.RightSectorNum != 0;
@@ -181,10 +245,8 @@ namespace Meridian59.TuiClient
                     if (roo.Things.Count >= 2)
                     {
                         var box = roo.GetBoundingBox2DFromThings();
-                        int bx0 = (int)Math.Round((box.Min.X - centerX) / rooToGrid) + width / 2;
-                        int by0 = -(int)Math.Round((box.Min.Y - centerY) / rooToGrid) + height / 2;
-                        int bx1 = (int)Math.Round((box.Max.X - centerX) / rooToGrid) + width / 2;
-                        int by1 = -(int)Math.Round((box.Max.Y - centerY) / rooToGrid) + height / 2;
+                        WorldToView((float)box.Min.X, (float)box.Min.Y, out int bx0, out int by0);
+                        WorldToView((float)box.Max.X, (float)box.Max.Y, out int bx1, out int by1);
 
                         // Draw boundary box with 'B' at corners
                         nextBuffer.Set(bx0, by0, 'B');
@@ -197,12 +259,11 @@ namespace Meridian59.TuiClient
                 // 4. Place objects
                 if (data != null)
                 {
-                    foreach (var obj in data.RoomObjects)
+                    foreach (var obj in data.RoomObjects.ToList())
                     {
                         float objRooX = obj.CoordinateX * 16f - 1024f;
                         float objRooY = obj.CoordinateY * 16f - 1024f;
-                        int relX = (int)Math.Round((objRooX - centerX) / rooToGrid) + width / 2;
-                        int relY = -(int)Math.Round((objRooY - centerY) / rooToGrid) + height / 2;
+                        WorldToView(objRooX, objRooY, out int relX, out int relY);
 
                         if (relX >= 0 && relX < width && relY >= 1 && relY < height)
                             nextBuffer.Set(relX, relY, GetCharForObject(obj));
@@ -213,7 +274,7 @@ namespace Meridian59.TuiClient
                 nextBuffer.Set(width / 2, height / 2, avatar != null ? '@' : '+');
 
                 // 6. Apply Post-processing (Lighting and Vision Cone)
-                ApplyLighting(nextBuffer, width / 2, height / 2, viewAngle);
+                ApplyLighting(nextBuffer, width / 2, height / 2, avatarAngle, rotationAngle);
 
                 // 7. Diff-paint to console
                 for (int y = 0; y < height; y++)
@@ -241,7 +302,7 @@ namespace Meridian59.TuiClient
             }
         }
 
-        private void ApplyLighting(VideoBuffer buffer, int centerX, int centerY, float viewAngle)
+        private void ApplyLighting(VideoBuffer buffer, int centerX, int centerY, float avatarAngle, float rotationAngle)
         {
             float maxDist = Math.Min(buffer.Width, buffer.Height) * 0.8f;
 
@@ -259,9 +320,29 @@ namespace Meridian59.TuiClient
                     // Vision Cone (approx 90 degrees)
                     if (dist > 1.0f)
                     {
-                        float angle = MathF.Atan2(dy, dx);
-                        // Standard math is CCW, viewAngle is CW. Summing them should cancel the flip.
-                        float diff = MathF.Abs(NormalizeAngle(angle + viewAngle));
+                        float angle = MathF.Atan2(-dy, dx);
+                        
+                        // We need the difference between the screen pixel angle and the avatar's view angle
+                        // but both need to be in the same coordinate space (the screen space).
+                        // rotationAngle rotates the world to the screen.
+                        // avatarAngle is in world space (CW, 0=East).
+                        
+                        // In screen space, 'Up' is -Y (angle PI/2).
+                        // If FollowPlayerRotation is on, the player always faces 'Up' in screen space.
+                        // If FollowPlayerRotation is off, rotationAngle is 0, so screen space = world space.
+                        
+                        float targetScreenAngle = (float)Math.PI / 2.0f; // Default 'Up' in screen space
+                        if (rotationAngle == 0)
+                        {
+                            // North is 3072 in M59 (CW), which is Math.PI * 1.5 in standard (CCW) if 0 is East.
+                            // However, Atan2(-dy, dx) with -dy means standard cartesian where +Y is up.
+                            // Let's use the avatarAngle converted to screen space.
+                            // M59 Angle to Rad (CCW, 0=East):
+                            float ccwAvatarAngle = -avatarAngle; 
+                            targetScreenAngle = ccwAvatarAngle;
+                        }
+
+                        float diff = MathF.Abs(NormalizeAngle(angle - targetScreenAngle));
                         if (diff > MathF.PI / 4.0f) // 45 degrees either side
                         {
                             intensity *= 0.4f; // Dim areas outside vision cone

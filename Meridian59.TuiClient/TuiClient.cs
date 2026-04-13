@@ -154,12 +154,13 @@ namespace Meridian59.TuiClient
 
         public override void Update()
         {
-            try 
-            { 
+            try
+            {
                 base.Update();
-                ProcessScriptQueue();
             }
             catch (InvalidOperationException) { /* no TTY */ }
+
+            ProcessScriptQueue();
 
             // Manually handle input loop since IsService=true disables it in base
             if (HasTty)
@@ -470,7 +471,16 @@ namespace Meridian59.TuiClient
                 if (avatar != null)
                 {
                     Console.SetCursorPosition(60, 1);
-                    Console.Write($"X: {avatar.CoordinateX,5} Y: {avatar.CoordinateY,5}");
+                    Console.Write($"X:{avatar.CoordinateX,5} Y:{avatar.CoordinateY,5}");
+
+                    int rooX = avatar.CoordinateX * 16 - 1024;
+                    int rooZ = avatar.CoordinateY * 16 - 1024;
+                    int col    = rooX >= 0 ? rooX / 1024 + 1 : 0;
+                    int row    = rooZ >= 0 ? rooZ / 1024 + 1 : 0;
+                    int fineCol = rooX >= 0 ? (rooX % 1024) >> 4 : 0;
+                    int fineRow = rooZ >= 0 ? (rooZ % 1024) >> 4 : 0;
+                    Console.SetCursorPosition(17, 2);
+                    Console.Write($"R:{row,3} C:{col,3} FR:{fineRow,2} FC:{fineCol,2}");
                 }
             }
         }
@@ -1076,58 +1086,94 @@ namespace Meridian59.TuiClient
             }
             else
             {
-                switch (key.Key)
+                if (Config.KeyMap.TryGetValue(key.Key, out TuiAction action))
                 {
-                    case ConsoleKey.Enter:
-                        inputMode = true;
-                        DrawInputField();
-                        break;
-
-                    case ConsoleKey.Q:
-                        Log("SYS", "Exiting...");
-                        ServerConnection.Disconnect();
-                        IsRunning = false;
-                        break;
-
-                    case ConsoleKey.UpArrow:    Move( 0,  1, 3072); break;
-                    case ConsoleKey.DownArrow:  Move( 0, -1, 1024); break;
-                    case ConsoleKey.LeftArrow:  Move(-1,  0, 2048); break;
-                    case ConsoleKey.RightArrow: Move( 1,  0, 0);    break;
-
-                    case ConsoleKey.W: Move( 0,  1, 3072); break;
-                    case ConsoleKey.S: Move( 0, -1, 1024); break;
-                    case ConsoleKey.A: Move(-1,  0, 2048); break;
-                    case ConsoleKey.D: Move( 1,  0, 0);    break;
-
-                    case ConsoleKey.PageUp:
-                        scrollOffset = Math.Min(scrollOffset + 5, logBuffer.Count - 5);
-                        DrawLog();
-                        break;
-                    case ConsoleKey.PageDown:
-                        scrollOffset = Math.Max(0, scrollOffset - 5);
-                        DrawLog();
-                        break;
-
-                    case ConsoleKey.OemPlus:
-                    case ConsoleKey.Add:
-                        renderer.ZoomIn();
-                        DrawMap();
-                        break;
-
-                    case ConsoleKey.OemMinus:
-                    case ConsoleKey.Subtract:
-                        renderer.ZoomOut();
-                        DrawMap();
-                        break;
-
-                    case ConsoleKey.Spacebar:
-                        SendReqActivate();
-                        break;
-
-                    default:
-                        base.ProcessKeyPress(key);
-                        break;
+                    PerformAction(action);
                 }
+                else
+                {
+                    base.ProcessKeyPress(key);
+                }
+            }
+        }
+
+        private void PerformAction(TuiAction action)
+        {
+            switch (action)
+            {
+                case TuiAction.EnterChat:
+                    inputMode = true;
+                    DrawInputField();
+                    break;
+
+                case TuiAction.Quit:
+                    Log("SYS", "Exiting...");
+                    ServerConnection.Disconnect();
+                    IsRunning = false;
+                    break;
+
+                case TuiAction.MoveNorth: HandleMovement( 0, -1); break;
+                case TuiAction.MoveSouth: HandleMovement( 0,  1); break;
+                case TuiAction.MoveWest:  HandleMovement(-1,  0); break;
+                case TuiAction.MoveEast:  HandleMovement( 1,  0); break;
+
+                case TuiAction.ScrollUp:
+                    scrollOffset = Math.Min(scrollOffset + 5, logBuffer.Count - 5);
+                    DrawLog();
+                    break;
+                case TuiAction.ScrollDown:
+                    scrollOffset = Math.Max(0, scrollOffset - 5);
+                    DrawLog();
+                    break;
+
+                case TuiAction.ZoomIn:
+                    renderer.ZoomIn();
+                    DrawMap();
+                    break;
+                case TuiAction.ZoomOut:
+                    renderer.ZoomOut();
+                    DrawMap();
+                    break;
+
+                case TuiAction.ToggleRotation:
+                    renderer.CycleOrientation();
+                    Log("SYS", $"Orientation: {renderer.Orientation}");
+                    DrawMap();
+                    break;
+
+                case TuiAction.Use:
+                    SendReqActivate();
+                    break;
+
+                case TuiAction.ManualGo:
+                    Log("MOVE", $"Manual ReqGo at X={Data.AvatarObject?.CoordinateX} Y={Data.AvatarObject?.CoordinateY}");
+                    SendReqGo(true);
+                    break;
+
+                case TuiAction.Mail:
+                    ProcessCommand("/mail");
+                    break;
+
+                case TuiAction.Rest:
+                    SendUserCommandRest();
+                    break;
+
+                case TuiAction.Stand:
+                    SendUserCommandStand();
+                    break;
+
+                case TuiAction.ToggleNoClip:
+                    isNoClip = !isNoClip;
+                    Log("SYS", "Noclip: " + (isNoClip ? "ON" : "OFF"));
+                    break;
+
+                case TuiAction.Hotkey1:
+                case TuiAction.Hotkey2:
+                case TuiAction.Hotkey3:
+                case TuiAction.Hotkey4:
+                    // Implement specific hotkey logic if needed, for now just log it
+                    Log("SYS", $"Hotkey pressed: {action}");
+                    break;
             }
         }
 
@@ -1168,6 +1214,11 @@ namespace Meridian59.TuiClient
                 SendReqGo(true);
                 return;
             }
+
+            if (text.Equals("w", StringComparison.OrdinalIgnoreCase)) { HandleMovement( 0, -1); return; }
+            if (text.Equals("s", StringComparison.OrdinalIgnoreCase)) { HandleMovement( 0,  1); return; }
+            if (text.Equals("a", StringComparison.OrdinalIgnoreCase)) { HandleMovement(-1,  0); return; }
+            if (text.Equals("d", StringComparison.OrdinalIgnoreCase)) { HandleMovement( 1,  0); return; }
 
             if (text.Equals("noclip", StringComparison.OrdinalIgnoreCase))
             {
@@ -1223,7 +1274,8 @@ namespace Meridian59.TuiClient
         private bool DoFineStep(V2 direction, float worldDist)
         {
             var avatar = Data.AvatarObject;
-            if (avatar == null || CurrentRoom == null) return false;
+            if (avatar == null) { Log("DBG", "DoFineStep: avatar null"); return false; }
+            if (CurrentRoom == null) { Log("DBG", $"DoFineStep: CurrentRoom null (roomFile={Data.RoomInformation.RoomFile})"); return false; }
             var start2D = avatar.Position2D;
             var targetEnd = start2D + (direction * (Real)worldDist);
             var rooStart = avatar.Position3D.Clone();
@@ -1238,14 +1290,54 @@ namespace Meridian59.TuiClient
             return true;
         }
 
+        private void HandleMovement(int dx, int dy)
+        {
+            if (Data.AvatarObject == null) return;
+
+            if (renderer.Orientation == ViewOrientation.FollowRotation)
+            {
+                // In M59, AngleUnits are 0-4095 CW: 0=East, 1024=South, 2048=West, 3072=North
+                float avatarRad = (float)(Data.AvatarObject.AngleUnits * 2.0 * Math.PI / 4096.0);
+                float cos = MathF.Cos(avatarRad);
+                float sin = MathF.Sin(avatarRad);
+
+                float worldDx = (-dy * cos) + (dx * -sin);
+                float worldDy = (-dy * sin) + (dx * cos);
+
+                Move((int)Math.Round(worldDx), (int)Math.Round(worldDy), Data.AvatarObject.AngleUnits);
+            }
+            else if (renderer.Orientation == ViewOrientation.SouthUp)
+            {
+                // Upside down: Inverting both axes
+                ushort angle = 0;
+                if (dx == 1) angle = 2048;      // Move East (Right) -> World West
+                else if (dx == -1) angle = 0;   // Move West (Left) -> World East
+                else if (dy == 1) angle = 3072; // Move South (Down) -> World North
+                else if (dy == -1) angle = 1024;// Move North (Up) -> World South
+                Move(-dx, -dy, angle);
+            }
+            else
+            {
+                // Absolute North-up movement
+                ushort angle = 0;
+                if (dx == 1) angle = 0;
+                else if (dx == -1) angle = 2048;
+                else if (dy == 1) angle = 1024;
+                else if (dy == -1) angle = 3072;
+                Move(dx, dy, angle);
+            }
+        }
+
         private DateTime nextMoveAt = DateTime.MinValue;
+        private DateTime nextReqGoAt = DateTime.MinValue;
 
         private void Move(int dx, int dy, ushort angle)
         {
             if (DateTime.Now < nextMoveAt) return;
             nextMoveAt = DateTime.Now.AddMilliseconds(100);
             var avatar = Data.AvatarObject;
-            if (avatar == null) return;
+            if (avatar == null) { Log("DBG", "Move: avatar null"); return; }
+            Log("DBG", $"Move({dx},{dy}) X:{avatar.CoordinateX} Y:{avatar.CoordinateY} room:{CurrentRoom != null}");
             if (avatar.AngleUnits != angle)
             {
                 avatar.AngleUnits = angle;
@@ -1268,8 +1360,8 @@ namespace Meridian59.TuiClient
             {
                 var direction = new V2(dx, dy);
                 if (direction.LengthSquared > 0.001f) direction.Normalize();
-                float remaining = 16.0f; 
-                float stepSize = 4.0f;   
+                float remaining = 16.0f;
+                float stepSize = 4.0f;
                 bool movedAtAll = false;
                 while (remaining > 0.01f)
                 {
@@ -1278,50 +1370,26 @@ namespace Meridian59.TuiClient
                     {
                         remaining -= dist;
                         movedAtAll = true;
+                        // restore step size after a successful sub-step
+                        if (stepSize < 4.0f) stepSize = Math.Min(stepSize * 2.0f, 4.0f);
                     }
                     else
                     {
-                        if (stepSize > 0.0625f) stepSize = 0.0625f; 
-                        else break;
+                        // Halve the step size progressively so we slide up to the wall
+                        // boundary smoothly without overshooting.
+                        stepSize *= 0.5f;
+                        if (stepSize < 0.0625f) break;
                     }
                 }
-                if (movedAtAll) SendReqMoveMessage(true);
-                else
+                if (movedAtAll)
                 {
-                    bool atBoundary = false;
-                    bool transitionWall = false;
-                    if (CurrentRoom != null)
-                    {
-                        if (CurrentRoom.Things.Count >= 2)
-                        {
-                            var box = CurrentRoom.GetBoundingBox2DFromThings();
-                            float rooX = avatar.CoordinateX * 16f - 1024f;
-                            float rooY = avatar.CoordinateY * 16f - 1024f;
-                            float margin = 32.0f;
-                            if (rooX < box.Min.X + margin || rooX > box.Max.X - margin ||
-                                rooY < box.Min.Y + margin || rooY > box.Max.Y - margin) atBoundary = true;
-                        }
-                        if (!atBoundary)
-                        {
-                            var pos2D = new V2(avatar.CoordinateX * 16f - 1024f, avatar.CoordinateY * 16f - 1024f);
-                            foreach (var wall in CurrentRoom.Walls)
-                            {
-                                bool isPassable = (wall.LeftSide != null && wall.LeftSide.Flags.IsPassable) ||
-                                                  (wall.RightSide != null && wall.RightSide.Flags.IsPassable);
-                                if (isPassable)
-                                {
-                                    int uc;
-                                    var p1 = wall.P1;
-                                    var p2 = wall.P2;
-                                    double dist2 = (double)pos2D.MinSquaredDistanceToLineSegment(ref p1, ref p2, out uc);
-                                    if (dist2 < 4096.0) { transitionWall = true; break; }
-                                }
-                            }
-                        }
-                    }
-                    if (atBoundary || transitionWall) SendReqGo(true);
-                    else Log("SYS", "Wall collision. (Try 'noclip' if stuck)");
+                    byte origSpeed = (byte)avatar.HorizontalSpeed;
+                    avatar.HorizontalSpeed = 16;
+                    SendReqMoveMessage(true);
+                    avatar.HorizontalSpeed = origSpeed;
                 }
+                // When fully blocked, do NOT send ReqGo — that is an explicit door
+                // action triggered by the G key only, not by walking into a wall.
             }
             if (isRecording) recorder.Record("Move", avatar, $"X:{avatar.CoordinateX},Y:{avatar.CoordinateY},A:{angle}");
         }

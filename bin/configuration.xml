@@ -2,7 +2,7 @@
 <configuration>
   <resources
     version="10016"
-    path="../Resources/"
+    path="Resources"
     preloadrooms="false"
     preloadobjects="false"
     preloadroomtextures="false"
