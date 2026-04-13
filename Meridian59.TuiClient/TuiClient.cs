@@ -93,7 +93,7 @@ namespace Meridian59.TuiClient
         public bool NoAutoexec { get; set; } = false;
 
         // Layout constants
-        private const int LOG_FIRST_ROW = 5;  // first row of the log area (row 0-4 are stats)
+        private const int LOG_FIRST_ROW = 4;  // first row of the log area (row 0-3 are stats)
         private const int LEFT_PANEL_WIDTH = 78; // printable cols inside left panel (cols 1..78)
 
         public TuiClient() : base()
@@ -1511,6 +1511,22 @@ namespace Meridian59.TuiClient
             base.SendSayGroupMessage(TargetID, Text);
             if (isRecording)
                 recorder.Record("SaidGroup", Data.AvatarObject, $"{TargetID}:{Text}");
+        }
+        protected void Dispose(bool disposing)
+        {
+            if (disposing && HasTty)
+            {
+                Console.CursorVisible = true;
+                Console.ResetColor();
+                Console.SetCursorPosition(0, Console.WindowHeight - 1);
+                Console.WriteLine();
+            }
+        }
+
+        public void Dispose()
+        {
+            Dispose(true);
+            GC.SuppressFinalize(this);
         }
     }
 }

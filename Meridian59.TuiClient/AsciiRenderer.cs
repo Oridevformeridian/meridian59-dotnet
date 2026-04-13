@@ -276,6 +276,10 @@ namespace Meridian59.TuiClient
                 // 6. Apply Post-processing (Lighting and Vision Cone)
                 ApplyLighting(nextBuffer, width / 2, height / 2, avatarAngle, rotationAngle);
 
+                // Ensure status line (y=0) is fully visible
+                for (int x = 0; x < width; x++)
+                    nextBuffer.Cells[x, 0].Intensity = 1.0f;
+
                 // 7. Diff-paint to console
                 for (int y = 0; y < height; y++)
                 {
@@ -306,7 +310,7 @@ namespace Meridian59.TuiClient
         {
             float maxDist = Math.Min(buffer.Width, buffer.Height) * 0.8f;
 
-            for (int y = 1; y < buffer.Height; y++)
+            for (int y = 0; y < buffer.Height; y++)
             {
                 for (int x = 0; x < buffer.Width; x++)
                 {
@@ -386,10 +390,9 @@ namespace Meridian59.TuiClient
 
             while (true)
             {
-                // Skip y=0 because it has our status line
-                if (x0 >= 0 && x0 < buffer.Width && y0 >= 1 && y0 < buffer.Height)
+                if (x0 >= 0 && x0 < buffer.Width && y0 >= 0 && y0 < buffer.Height)
                 {
-                    // Don't overwrite objects or the player symbol
+                    // Don't overwrite status line text at y=0, but we can draw on the rest of the line
                     char c = buffer.Cells[x0, y0].Char;
                     if (c == ' ' || c == '.' || c == '\0')
                         buffer.Set(x0, y0, symbol);
