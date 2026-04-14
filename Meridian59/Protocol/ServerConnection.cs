@@ -273,14 +273,16 @@ namespace Meridian59.Protocol
         public void Connect(string ServerAddr, ushort Port)
         {
             // make sure we're disconnected
-            Disconnect();
+            Disconnect("New connection request");
          
             // save connection settings
             serverAddress = ServerAddr;
             serverPort = Port;
  
             // make log entry
-            Logger.Log(MODULENAME, LogType.Info, "Connecting to " + serverAddress + ":" + serverPort.ToString());
+            string logMsg = "Connecting to " + serverAddress + ":" + serverPort.ToString();
+            Logger.Log(MODULENAME, LogType.Info, logMsg);
+            if (OnLog != null) OnLog("SYS", logMsg);
             
             // Start workthread
             workThread = new Thread(new ThreadStart(ThreadProc));
@@ -292,12 +294,14 @@ namespace Meridian59.Protocol
         /// Close connection. This will block for some time to let the async
         /// network thread exit its loop.
         /// </summary>
-        public void Disconnect()
+        public void Disconnect(string reason = "Unknown")
         {
             if (isRunning || !(ConnectionState == ConnectionState.Offline))
             {
                 // make log entry
-                Logger.Log(MODULENAME, LogType.Info, "Disconnecting.");
+                string logMsg = $"Disconnecting. Reason: {reason}";
+                Logger.Log(MODULENAME, LogType.Info, logMsg);
+                if (OnLog != null) OnLog("SYS", logMsg);
 
                 // mark disconnected
                 connectionState = ConnectionState.Offline;
@@ -318,6 +322,8 @@ namespace Meridian59.Protocol
         /// <param name="Flush">Flush TCP buffer or not</param>
         protected void Send(GameMessage Message, bool Flush = true)
         {
+            Message.SendRecvTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
+
             // surpress accidentially sent messages
             // after BP_REQ_QUIT and while we're waiting for BP_QUIT (server won't understand)
             if (isQuitting)
@@ -607,6 +613,8 @@ namespace Meridian59.Protocol
         /// <param name="e"></param>
         protected void OnMessageControllerNewMessageAvailable(object sender, GameMessageEventArgs e)
         {
+            e.Message.SendRecvTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
+
             if (e.Message is LoginModeMessage)           
                 HandleLoginModeMessage((LoginModeMessage)e.Message);
             

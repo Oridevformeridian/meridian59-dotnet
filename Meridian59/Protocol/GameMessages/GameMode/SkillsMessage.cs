@@ -18,6 +18,8 @@ using System;
 using Meridian59.Common.Constants;
 using Meridian59.Protocol.Enums;
 using Meridian59.Data.Models;
+using Meridian59.Common;
+using Meridian59.Common.Enums;
 
 namespace Meridian59.Protocol.GameMessages
 {
@@ -61,6 +63,15 @@ namespace Meridian59.Protocol.GameMessages
 
             ushort len = BitConverter.ToUInt16(Buffer, cursor);
             cursor += TypeSizes.SHORT;
+
+            if (len > 500)
+            {
+                Logger.Log("SkillsMessage", LogType.Error, $"Suspect skill count: {len}. Skipping body to avoid desync.");
+                SkillObjects = new SkillObject[0];
+                // Try to consume as much as possible if we know the expected length, 
+                // but since we don't, we're likely already in a bad state.
+                return cursor - StartIndex;
+            }
 
             SkillObjects = new SkillObject[len];
             for (int i = 0; i < len; i++)

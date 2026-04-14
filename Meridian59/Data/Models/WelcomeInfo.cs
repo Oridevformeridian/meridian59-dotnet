@@ -75,29 +75,41 @@ namespace Meridian59.Data.Models
         public int ReadFrom(byte[] Buffer, int StartIndex = 0)
         {
             int cursor = StartIndex;
-           
+
+            if (cursor + TypeSizes.SHORT > Buffer.Length) return cursor - StartIndex;
             ushort len = BitConverter.ToUInt16(Buffer, cursor);
             cursor += TypeSizes.SHORT;
 
+            // Sanity cap: no account ever has more than 20 characters.
+            if (len > 20) len = 0;
             for (ushort i = 0; i < len; i++)
             {
-                Characters.Add(new CharSelectItem(Buffer, cursor));
-                cursor += Characters[i].ByteLength;
+                if (cursor >= Buffer.Length) break;
+                var item = new CharSelectItem(Buffer, cursor);
+                Characters.Add(item);
+                cursor += item.ByteLength;
             }
 
+            if (cursor + TypeSizes.SHORT > Buffer.Length) return cursor - StartIndex;
             len = BitConverter.ToUInt16(Buffer, cursor);
             cursor += TypeSizes.SHORT;
 
+            if (cursor + len > Buffer.Length) len = (ushort)Math.Max(0, Buffer.Length - cursor);
             MOTD = Util.Encoding.GetString(Buffer, cursor, len);
             cursor += MOTD.Length;
 
+            if (cursor >= Buffer.Length) return cursor - StartIndex;
             byte blen = Buffer[cursor];
             cursor++;
 
+            // Sanity cap: ads list is never large.
+            if (blen > 64) blen = 0;
             for (byte i = 0; i < blen; i++)
             {
-                Ads.Add(new CharSelectAd(Buffer, cursor));
-                cursor += Ads[i].ByteLength;
+                if (cursor >= Buffer.Length) break;
+                var ad = new CharSelectAd(Buffer, cursor);
+                Ads.Add(ad);
+                cursor += ad.ByteLength;
             }
 
             return cursor - StartIndex;

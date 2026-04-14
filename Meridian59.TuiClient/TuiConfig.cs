@@ -8,10 +8,10 @@ namespace Meridian59.TuiClient
     public enum TuiAction
     {
         None,
-        MoveNorth,
-        MoveSouth,
-        MoveEast,
-        MoveWest,
+        MoveUp,
+        MoveDown,
+        MoveRight,
+        MoveLeft,
         Hotkey1,
         Hotkey2,
         Hotkey3,
@@ -44,14 +44,14 @@ namespace Meridian59.TuiClient
         private void SetDefaultKeyMap()
         {
             KeyMap.Clear();
-            KeyMap[ConsoleKey.UpArrow]    = TuiAction.MoveNorth;
-            KeyMap[ConsoleKey.DownArrow]  = TuiAction.MoveSouth;
-            KeyMap[ConsoleKey.LeftArrow]  = TuiAction.MoveWest;
-            KeyMap[ConsoleKey.RightArrow] = TuiAction.MoveEast;
-            KeyMap[ConsoleKey.W]          = TuiAction.MoveNorth;
-            KeyMap[ConsoleKey.S]          = TuiAction.MoveSouth;
-            KeyMap[ConsoleKey.A]          = TuiAction.MoveWest;
-            KeyMap[ConsoleKey.D]          = TuiAction.MoveEast;
+            KeyMap[ConsoleKey.UpArrow]    = TuiAction.MoveUp;
+            KeyMap[ConsoleKey.DownArrow]  = TuiAction.MoveDown;
+            KeyMap[ConsoleKey.LeftArrow]  = TuiAction.MoveLeft;
+            KeyMap[ConsoleKey.RightArrow] = TuiAction.MoveRight;
+            KeyMap[ConsoleKey.W]          = TuiAction.MoveUp;
+            KeyMap[ConsoleKey.S]          = TuiAction.MoveDown;
+            KeyMap[ConsoleKey.A]          = TuiAction.MoveLeft;
+            KeyMap[ConsoleKey.D]          = TuiAction.MoveRight;
             KeyMap[ConsoleKey.Spacebar]   = TuiAction.Use;
             KeyMap[ConsoleKey.Q]          = TuiAction.Quit;
             KeyMap[ConsoleKey.Add]        = TuiAction.ZoomIn;
@@ -63,7 +63,6 @@ namespace Meridian59.TuiClient
             KeyMap[ConsoleKey.PageDown]   = TuiAction.ScrollDown;
             KeyMap[ConsoleKey.Enter]      = TuiAction.EnterChat;
             KeyMap[ConsoleKey.G]          = TuiAction.ManualGo;
-            // Hotkeys not bound by default in code, but available via config
         }
 
         public override void ReadXml(XmlDocument Document)

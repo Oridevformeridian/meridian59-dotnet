@@ -177,7 +177,7 @@ namespace Meridian59.Common.Constants
         /// <remarks>
         /// See 'SetPlayerInfo()' in 'clientd3d/game.c'
         /// </remarks>
-        public const Real PLAYERWIDTH = 31.0f * (Real)KOD_FINENESS / 4.0f;
+        public const Real PLAYERWIDTH = 31.0f;
 
         /// <summary>
         /// Minimum distance player has to stay away from wall.

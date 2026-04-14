@@ -63,12 +63,16 @@ namespace Meridian59.Protocol.GameMessages
 
             cursor += base.ReadFrom(Buffer, cursor);
 
+            if (cursor + TypeSizes.SHORT > Buffer.Length) { OfferedItems = new ObjectBase[0]; return cursor - StartIndex; }
             ushort len = BitConverter.ToUInt16(Buffer, cursor);
             cursor += TypeSizes.SHORT;
 
+            // Sanity cap: a trade offer never has more than 256 items.
+            if (len > 256) len = 0;
             OfferedItems = new ObjectBase[len];
             for (int i = 0; i < len; i++)
             {
+                if (cursor + TypeSizes.INT > Buffer.Length) break;
                 OfferedItems[i] = new ObjectBase(true, Buffer, cursor);
                 cursor += OfferedItems[i].ByteLength;
             }

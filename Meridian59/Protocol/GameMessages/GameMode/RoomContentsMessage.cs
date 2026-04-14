@@ -18,6 +18,8 @@ using System;
 using Meridian59.Common.Constants;
 using Meridian59.Protocol.Enums;
 using Meridian59.Data.Models;
+using Meridian59.Common;
+using Meridian59.Common.Enums;
 
 namespace Meridian59.Protocol.GameMessages
 {
@@ -66,6 +68,13 @@ namespace Meridian59.Protocol.GameMessages
 
             ushort len = BitConverter.ToUInt16(Buffer, cursor);
             cursor += TypeSizes.SHORT;
+
+            if (len > 1000)
+            {
+                Logger.Log("RoomContentsMessage", LogType.Error, $"Suspect object count: {len}. Skipping body.");
+                RoomObjects = new RoomObject[0];
+                return cursor - StartIndex;
+            }
 
             RoomObjects = new RoomObject[len];
             for (int i = 0; i < len; i++)

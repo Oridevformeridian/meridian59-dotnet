@@ -75,6 +75,11 @@ namespace Meridian59.Protocol.GameMessages
 
         #region Properties
         /// <summary>
+        /// High-precision timestamp when this message was sent or received.
+        /// </summary>
+        public long SendRecvTimestamp { get; set; }
+
+        /// <summary>
         /// Transferdirection of the message
         /// </summary>
         public MessageDirection TransferDirection { get; set; }

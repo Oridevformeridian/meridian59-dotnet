@@ -224,6 +224,43 @@ namespace Meridian59.Bot
         }
 
         /// <summary>
+        /// Process message queues and record metrics.
+        /// </summary>
+        protected override void ProcessQueues()
+        {
+            Exception error;
+            GameMessage message;
+
+            // Handle all exceptions from networkclient
+            while (ServerConnection.ExceptionQueue.TryDequeue(out error))          
+                OnServerConnectionException(error);
+
+            // Handle the outgoing MessageLog (debug for sent packets)
+            while (ServerConnection.OutgoingPacketLog.TryDequeue(out message))
+            {
+                // Record metric for sending
+                double now = (double)System.Diagnostics.Stopwatch.GetTimestamp() / (double)System.Diagnostics.Stopwatch.Frequency * 1000.0;
+                double ts = (double)message.SendRecvTimestamp / (double)System.Diagnostics.Stopwatch.Frequency * 1000.0;
+                Metrics.Record($"Sent:{message.PI}", now - ts);
+                Log("METR", $"Sent:{message.PI} Latency:{now - ts:F2}ms");
+
+                Data.LogOutgoingPacket(message); 
+            }
+               
+            // Handle all pending incoming messages done from enrichment
+            while (MessageEnrichment.OutputQueue.TryDequeue(out message))
+            {
+                // Record metric for receiving
+                double now = (double)System.Diagnostics.Stopwatch.GetTimestamp() / (double)System.Diagnostics.Stopwatch.Frequency * 1000.0;
+                double ts = (double)message.SendRecvTimestamp / (double)System.Diagnostics.Stopwatch.Frequency * 1000.0;
+                Metrics.Record($"Recv:{message.PI}", now - ts);
+                Log("METR", $"Recv:{message.PI} Latency:{now - ts:F2}ms");
+
+                HandleGameMessage(message);       
+            }
+        }
+
+        /// <summary>
         /// Major version of the client
         /// </summary>
         public override byte AppVersionMajor
@@ -245,6 +282,7 @@ namespace Meridian59.Bot
         public override void Init()
         {
             base.Init();
+            ServerConnection.IsOutgoingPacketLogEnabled = true;
 
             if (!IsService)
             {
@@ -286,7 +324,7 @@ namespace Meridian59.Bot
         protected override void OnServerConnectionException(Exception Error)
         {
             // close connection and exit         
-            ServerConnection.Disconnect();
+            ServerConnection.Disconnect($"Network Error: {Error.Message}");
             IsRunning = false;
 
             Log("ERROR", LOG_NETERROR);
@@ -328,7 +366,7 @@ namespace Meridian59.Bot
             // adjust major/min version in configuration.xml
 
             // close connection and exit         
-            ServerConnection.Disconnect();
+            ServerConnection.Disconnect("Client version mismatch");
             IsRunning = false;
 
             Log("ERROR", LOG_APPVERSIONERROR);
@@ -364,7 +402,7 @@ namespace Meridian59.Bot
             base.HandleLoginFailedMessage(Message);
 
             // close connection and exit         
-            ServerConnection.Disconnect();
+            ServerConnection.Disconnect("Login failed (wrong credentials)");
             IsRunning = false;
 
             Log("ERROR", LOG_CREDENTIALSWRONG);
@@ -391,7 +429,7 @@ namespace Meridian59.Bot
             // adjust resourceversion in configuration.xml
 
             // close connection and exit         
-            ServerConnection.Disconnect();
+            ServerConnection.Disconnect("Resource version mismatch (Download proposed)");
             IsRunning = false;
 
             Log("ERROR", LOG_WRONGRESVERSION);
@@ -432,7 +470,7 @@ namespace Meridian59.Bot
             {
                 // error - char not found
                 // close connection and exit         
-                ServerConnection.Disconnect();
+                ServerConnection.Disconnect("Character not found on account");
                 IsRunning = false;
 
                 if (Config.SelectedConnectionInfo != null)

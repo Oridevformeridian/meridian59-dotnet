@@ -357,6 +357,7 @@ namespace Meridian59.Data.Models
             }
         }
 
+        #region IByteSerializable
         public override int ByteLength
         {
             get

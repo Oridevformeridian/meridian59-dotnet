@@ -53,20 +53,24 @@ namespace Meridian59.Data.Models
         public int ReadFrom(byte[] Buffer, int StartIndex = 0)
         {
             int cursor = StartIndex;
-            
+
+            if (cursor + TypeSizes.SHORT > Buffer.Length) { fileName = String.Empty; url = String.Empty; return cursor - StartIndex; }
             ushort strlen = BitConverter.ToUInt16(Buffer, cursor);          // FileNameLEN (2 bytes)
             cursor += TypeSizes.SHORT;
 
+            if (cursor + strlen > Buffer.Length) strlen = (ushort)Math.Max(0, Buffer.Length - cursor);
             fileName = Util.Encoding.GetString(Buffer, cursor, strlen);  // FileName (n bytes)
             cursor += strlen;
 
+            if (cursor + TypeSizes.SHORT > Buffer.Length) { url = String.Empty; return cursor - StartIndex; }
             strlen = BitConverter.ToUInt16(Buffer, cursor);                 // URLLEN (2 bytes)
             cursor += TypeSizes.SHORT;
 
+            if (cursor + strlen > Buffer.Length) strlen = (ushort)Math.Max(0, Buffer.Length - cursor);
             url = Util.Encoding.GetString(Buffer, cursor, strlen);       // URL (n bytes)
             cursor += strlen;
 
-            return cursor - StartIndex; 
+            return cursor - StartIndex;
         }
 
         public int WriteTo(byte[] Buffer, int StartIndex = 0)

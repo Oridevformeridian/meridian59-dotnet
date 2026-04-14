@@ -1635,13 +1635,29 @@ namespace Meridian59.Files.ROO
         /// </summary>
         protected bool CanMoveInRoomTree3DInternal(RooSector SectorS, RooSector SectorE, RooSideDef SideS, RooSideDef SideE, RooWall Wall, ref V2 Q)
         {
-            // block moves with end outside
-            if (SectorE == null || SideE == null)
-               return false;
-
+            bool sidePassable = SideS != null && SideS.Flags.IsPassable;
             // sides which have no passable flag set always block
             if (SideS != null && !SideS.Flags.IsPassable)
+            {
+               Logger.Log("RooFile", LogType.Info, $"BLOCK: wall P1=({Wall?.P1.X:F0},{Wall?.P1.Y:F0}) P2=({Wall?.P2.X:F0},{Wall?.P2.Y:F0}) SideS.IsPassable={sidePassable} SectorE={SectorE?.Num.ToString() ?? "null"}");
                return false;
+            }
+
+            // block moves into void (no destination sector), unless the wall is passable
+            // (e.g. an exit door). Passable walls with null SectorE are room exits —
+            // the player can slide up to them; the server handles the actual transition.
+            if ((SectorE == null || SideE == null) && (SideS == null || !SideS.Flags.IsPassable))
+            {
+               Logger.Log("RooFile", LogType.Info, $"BLOCK-VOID: wall P1=({Wall?.P1.X:F0},{Wall?.P1.Y:F0}) P2=({Wall?.P2.X:F0},{Wall?.P2.Y:F0}) SideS={SideS?.Flags.IsPassable.ToString() ?? "null"} SectorE={SectorE?.Num.ToString() ?? "null"}");
+               return false;
+            }
+
+            // remaining checks require a valid destination sector
+            if (SectorE == null)
+            {
+               Logger.Log("RooFile", LogType.Info, $"ALLOW-PASSABLE-EXIT: wall P1=({Wall?.P1.X:F0},{Wall?.P1.Y:F0}) P2=({Wall?.P2.X:F0},{Wall?.P2.Y:F0})");
+               return true;
+            }
 #if !VANILLA && !OPENMERIDIAN
             // endsector must not be marked SF_NOMOVE
             if (SectorE.Flags.IsNoMove)

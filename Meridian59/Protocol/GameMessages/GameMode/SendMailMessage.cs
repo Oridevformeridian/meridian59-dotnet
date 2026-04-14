@@ -72,16 +72,33 @@ namespace Meridian59.Protocol.GameMessages
             ushort len = BitConverter.ToUInt16(Buffer, cursor);
             cursor += TypeSizes.SHORT;
 
+            // Sanity check: guard against garbage recipient count running cursor off the buffer.
+            // A legitimate SendMail never has more than 32 recipients.
+            if (len > 32)
+            {
+                RecipientsIDs = new ObjectID[0];
+                Text = String.Empty;
+                return cursor - StartIndex;
+            }
+
             RecipientsIDs = new ObjectID[len];
             for (int i = 0; i < len; i++)
             {
+                if (cursor + TypeSizes.INT > Buffer.Length) break;
                 RecipientsIDs[i] = new ObjectID(Buffer, cursor);
                 cursor += RecipientsIDs[i].ByteLength;
+            }
+
+            if (cursor + TypeSizes.SHORT > Buffer.Length)
+            {
+                Text = String.Empty;
+                return cursor - StartIndex;
             }
 
             len = BitConverter.ToUInt16(Buffer, cursor);
             cursor += TypeSizes.SHORT;
 
+            if (cursor + len > Buffer.Length) len = (ushort)Math.Max(0, Buffer.Length - cursor);
             Text = Util.Encoding.GetString(Buffer, cursor, len);
             cursor += len;
 

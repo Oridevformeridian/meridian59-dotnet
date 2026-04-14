@@ -229,139 +229,224 @@ namespace Meridian59.Data.Models
         {
             int cursor = StartIndex;
 
+            // Sanity cap for face-part ID lists: a real CharInfo never has more than 128 entries.
+            const int MAX_FACE_IDS = 128;
+            // Sanity cap for spell/skill lists: generous but still finite.
+            const int MAX_SPELL_SKILL = 2048;
+
+            if (cursor >= Buffer.Length) return 0;
+
             byte blen = Buffer[cursor];
             cursor++;
 
+            if (cursor + blen > Buffer.Length) blen = (byte)Math.Max(0, Buffer.Length - cursor);
             HairColors = new byte[blen];
             Array.Copy(Buffer, cursor, HairColors, 0, blen);
             cursor += blen;
 
+            if (cursor >= Buffer.Length) { SkinColors = new byte[0]; InitRemainingEmpty(); return cursor - StartIndex; }
             blen = Buffer[cursor];
             cursor++;
 
+            if (cursor + blen > Buffer.Length) blen = (byte)Math.Max(0, Buffer.Length - cursor);
             SkinColors = new byte[blen];
             Array.Copy(Buffer, cursor, SkinColors, 0, blen);
             cursor += blen;
 
             // MALE parts
+            if (cursor + TypeSizes.INT > Buffer.Length) { InitRemainingEmpty(); return cursor - StartIndex; }
             int ilen = BitConverter.ToInt32(Buffer, cursor);
             cursor += TypeSizes.INT;
 
+            if ((uint)ilen > MAX_FACE_IDS) ilen = 0;
             MaleHairIDs = new ResourceIDBGF[ilen];
             for (int i = 0; i < ilen; i++)
             {
+                if (cursor + TypeSizes.INT > Buffer.Length) break;
                 MaleHairIDs[i] = new ResourceIDBGF(Buffer, cursor);
                 cursor += TypeSizes.INT;
             }
 
+            if (cursor + TypeSizes.INT > Buffer.Length) { MaleSkullID = new ResourceIDBGF(0); InitRemainingEmpty2(); return cursor - StartIndex; }
             MaleSkullID = new ResourceIDBGF(Buffer, cursor);
             cursor += TypeSizes.INT;
 
+            if (cursor + TypeSizes.INT > Buffer.Length) { InitRemainingEmpty2(); return cursor - StartIndex; }
             ilen = BitConverter.ToInt32(Buffer, cursor);
             cursor += TypeSizes.INT;
 
+            if ((uint)ilen > MAX_FACE_IDS) ilen = 0;
             MaleEyeIDs = new ResourceIDBGF[ilen];
             for (int i = 0; i < ilen; i++)
             {
+                if (cursor + TypeSizes.INT > Buffer.Length) break;
                 MaleEyeIDs[i] = new ResourceIDBGF(Buffer, cursor);
                 cursor += TypeSizes.INT;
             }
 
+            if (cursor + TypeSizes.INT > Buffer.Length) { InitRemainingEmpty2(); return cursor - StartIndex; }
             ilen = BitConverter.ToInt32(Buffer, cursor);
             cursor += TypeSizes.INT;
 
+            if ((uint)ilen > MAX_FACE_IDS) ilen = 0;
             MaleNoseIDs = new ResourceIDBGF[ilen];
             for (int i = 0; i < ilen; i++)
             {
+                if (cursor + TypeSizes.INT > Buffer.Length) break;
                 MaleNoseIDs[i] = new ResourceIDBGF(Buffer, cursor);
                 cursor += TypeSizes.INT;
             }
 
+            if (cursor + TypeSizes.INT > Buffer.Length) { InitRemainingEmpty2(); return cursor - StartIndex; }
             ilen = BitConverter.ToInt32(Buffer, cursor);
             cursor += TypeSizes.INT;
 
+            if ((uint)ilen > MAX_FACE_IDS) ilen = 0;
             MaleMouthIDs = new ResourceIDBGF[ilen];
             for (int i = 0; i < ilen; i++)
             {
+                if (cursor + TypeSizes.INT > Buffer.Length) break;
                 MaleMouthIDs[i] = new ResourceIDBGF(Buffer, cursor);
                 cursor += TypeSizes.INT;
             }
 
             // FEMALE parts
+            if (cursor + TypeSizes.INT > Buffer.Length) { InitFemaleEmpty(); return cursor - StartIndex; }
             ilen = BitConverter.ToInt32(Buffer, cursor);
             cursor += TypeSizes.INT;
 
+            if ((uint)ilen > MAX_FACE_IDS) ilen = 0;
             FemaleHairIDs = new ResourceIDBGF[ilen];
             for (int i = 0; i < ilen; i++)
             {
+                if (cursor + TypeSizes.INT > Buffer.Length) break;
                 FemaleHairIDs[i] = new ResourceIDBGF(Buffer, cursor);
                 cursor += TypeSizes.INT;
             }
 
+            if (cursor + TypeSizes.INT > Buffer.Length) { FemaleSkullID = new ResourceIDBGF(0); InitFemaleEmpty2(); return cursor - StartIndex; }
             FemaleSkullID = new ResourceIDBGF(Buffer, cursor);
             cursor += TypeSizes.INT;
 
+            if (cursor + TypeSizes.INT > Buffer.Length) { InitFemaleEmpty2(); return cursor - StartIndex; }
             ilen = BitConverter.ToInt32(Buffer, cursor);
             cursor += TypeSizes.INT;
 
+            if ((uint)ilen > MAX_FACE_IDS) ilen = 0;
             FemaleEyeIDs = new ResourceIDBGF[ilen];
             for (int i = 0; i < ilen; i++)
             {
+                if (cursor + TypeSizes.INT > Buffer.Length) break;
                 FemaleEyeIDs[i] = new ResourceIDBGF(Buffer, cursor);
                 cursor += TypeSizes.INT;
             }
 
+            if (cursor + TypeSizes.INT > Buffer.Length) { InitFemaleEmpty2(); return cursor - StartIndex; }
             ilen = BitConverter.ToInt32(Buffer, cursor);
             cursor += TypeSizes.INT;
 
+            if ((uint)ilen > MAX_FACE_IDS) ilen = 0;
             FemaleNoseIDs = new ResourceIDBGF[ilen];
             for (int i = 0; i < ilen; i++)
             {
+                if (cursor + TypeSizes.INT > Buffer.Length) break;
                 FemaleNoseIDs[i] = new ResourceIDBGF(Buffer, cursor);
                 cursor += TypeSizes.INT;
             }
 
+            if (cursor + TypeSizes.INT > Buffer.Length) { InitFemaleEmpty2(); return cursor - StartIndex; }
             ilen = BitConverter.ToInt32(Buffer, cursor);
             cursor += TypeSizes.INT;
 
+            if ((uint)ilen > MAX_FACE_IDS) ilen = 0;
             FemaleMouthIDs = new ResourceIDBGF[ilen];
             for (int i = 0; i < ilen; i++)
             {
+                if (cursor + TypeSizes.INT > Buffer.Length) break;
                 FemaleMouthIDs[i] = new ResourceIDBGF(Buffer, cursor);
                 cursor += TypeSizes.INT;
             }
 
             // SPELLS
+            if (cursor + TypeSizes.INT > Buffer.Length) return cursor - StartIndex;
             ilen = BitConverter.ToInt32(Buffer, cursor);
             cursor += TypeSizes.INT;
 
+            if ((uint)ilen > MAX_SPELL_SKILL) ilen = 0;
             Spells.Clear();
             for (int i = 0; i < ilen; i++)
             {
-                AvatarCreatorSpellObject spellObj = 
+                if (cursor >= Buffer.Length) break;
+                AvatarCreatorSpellObject spellObj =
                     new AvatarCreatorSpellObject(Buffer, cursor);
-                
+
                 cursor += spellObj.ByteLength;
 
                 Spells.Add(spellObj);
             }
 
             // SKILLS
+            if (cursor + TypeSizes.INT > Buffer.Length) return cursor - StartIndex;
             ilen = BitConverter.ToInt32(Buffer, cursor);
             cursor += TypeSizes.INT;
 
+            if ((uint)ilen > MAX_SPELL_SKILL) ilen = 0;
             Skills.Clear();
             for (int i = 0; i < ilen; i++)
             {
-                AvatarCreatorSkillObject skillObj = 
+                if (cursor >= Buffer.Length) break;
+                AvatarCreatorSkillObject skillObj =
                     new AvatarCreatorSkillObject(Buffer, cursor);
 
                 cursor += skillObj.ByteLength;
 
-                Skills.Add(skillObj);               
+                Skills.Add(skillObj);
             }
 
             return cursor - StartIndex;
+        }
+
+        // Helpers used by ReadFrom early-exit paths to ensure all fields are non-null.
+        private void InitRemainingEmpty()
+        {
+            MaleHairIDs = new ResourceIDBGF[0];
+            MaleSkullID = new ResourceIDBGF(0);
+            MaleEyeIDs = new ResourceIDBGF[0];
+            MaleNoseIDs = new ResourceIDBGF[0];
+            MaleMouthIDs = new ResourceIDBGF[0];
+            FemaleHairIDs = new ResourceIDBGF[0];
+            FemaleSkullID = new ResourceIDBGF(0);
+            FemaleEyeIDs = new ResourceIDBGF[0];
+            FemaleNoseIDs = new ResourceIDBGF[0];
+            FemaleMouthIDs = new ResourceIDBGF[0];
+        }
+
+        private void InitRemainingEmpty2()
+        {
+            MaleEyeIDs = MaleEyeIDs ?? new ResourceIDBGF[0];
+            MaleNoseIDs = MaleNoseIDs ?? new ResourceIDBGF[0];
+            MaleMouthIDs = MaleMouthIDs ?? new ResourceIDBGF[0];
+            FemaleHairIDs = new ResourceIDBGF[0];
+            FemaleSkullID = new ResourceIDBGF(0);
+            FemaleEyeIDs = new ResourceIDBGF[0];
+            FemaleNoseIDs = new ResourceIDBGF[0];
+            FemaleMouthIDs = new ResourceIDBGF[0];
+        }
+
+        private void InitFemaleEmpty()
+        {
+            FemaleHairIDs = new ResourceIDBGF[0];
+            FemaleSkullID = new ResourceIDBGF(0);
+            FemaleEyeIDs = new ResourceIDBGF[0];
+            FemaleNoseIDs = new ResourceIDBGF[0];
+            FemaleMouthIDs = new ResourceIDBGF[0];
+        }
+
+        private void InitFemaleEmpty2()
+        {
+            FemaleEyeIDs = FemaleEyeIDs ?? new ResourceIDBGF[0];
+            FemaleNoseIDs = FemaleNoseIDs ?? new ResourceIDBGF[0];
+            FemaleMouthIDs = FemaleMouthIDs ?? new ResourceIDBGF[0];
         }
 
         public byte[] Bytes

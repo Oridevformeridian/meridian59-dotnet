@@ -11,10 +11,16 @@ namespace Meridian59.TuiClient
             Console.Title = "Meridian 59 TUI Client";
 
             bool noAutoexec = false;
-            foreach (var arg in args)
+            string scriptFile = null;
+            for (int i = 0; i < args.Length; i++)
             {
+                string arg = args[i];
                 if (arg.Equals("--no-autoexec", StringComparison.OrdinalIgnoreCase))
                     noAutoexec = true;
+                else if ((arg.Equals("-s", StringComparison.OrdinalIgnoreCase) || arg.Equals("--script", StringComparison.OrdinalIgnoreCase)) && i + 1 < args.Length)
+                {
+                    scriptFile = args[++i];
+                }
             }
 
             try
@@ -22,6 +28,7 @@ namespace Meridian59.TuiClient
                 using (var client = new TuiClient())
                 {
                     client.NoAutoexec = noAutoexec;
+                    client.ScriptFile = scriptFile;
                     client.IsService = false;
                     client.Start(false);
 

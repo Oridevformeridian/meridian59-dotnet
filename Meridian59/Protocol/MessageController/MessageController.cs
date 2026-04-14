@@ -660,6 +660,8 @@ namespace Meridian59.Protocol
 
                     case MessageTypeGameMode.Stat:                                            // PI: 131
                         TypedMessage = new StatMessage(e.MessageBuffer);
+                        if (((StatMessage)TypedMessage).Stat == null)
+                            Log("WARN", $"BP_Stat: Stat=null, body={e.Length - MessageHeader.Tcp.HEADERLENGTH}B raw=[{BitConverter.ToString(e.MessageBuffer, 0, e.Length)}]");
                         HandleStat((StatMessage)TypedMessage);
                         break;
 
@@ -1195,6 +1197,7 @@ namespace Meridian59.Protocol
 
         protected void HandleStat(StatMessage Message)
         {
+            if (Message.Stat == null) return;
             switch (Message.Stat.Type)
             {
                 case StatType.Numeric:

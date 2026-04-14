@@ -54,12 +54,21 @@ namespace Meridian59.Protocol.GameMessages
 
             cursor += base.ReadFrom(Buffer, cursor);
 
+            // Use the header-encoded body limit rather than Buffer.Length.
+            // Buffer is the shared 65542-byte receive buffer; bytes beyond the
+            // actual message boundary are stale data from a previous message.
+            int msgEnd = StartIndex + Header.ByteLength + Header.BodyLength;
+
+            if (cursor >= msgEnd) return cursor - StartIndex;
             Group = (StatGroup)Buffer[cursor];
             cursor++;
 
+            // ExtractStat peeks at Buffer[cursor + TypeOffset(5)] — need at least 6 bytes
+            if (cursor + Stat.TypeOffset + 1 > msgEnd) return cursor - StartIndex;
             Stat = Stat.ExtractStat(Buffer, cursor);
-            cursor += Stat.ByteLength;
-           
+            if (Stat != null)
+                cursor += Stat.ByteLength;
+
             return cursor - StartIndex;
         }
 

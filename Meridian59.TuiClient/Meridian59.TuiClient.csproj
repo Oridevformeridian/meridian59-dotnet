@@ -6,6 +6,10 @@
     <Nullable>disable</Nullable>
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
     <DefineConstants>TRACE;VANILLA</DefineConstants>
+    <OutputPath>../bin</OutputPath>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
+    <NoWarn>$(NoWarn);CA1416;CS0618;SYSLIB0014;CS0108;CS0114</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>

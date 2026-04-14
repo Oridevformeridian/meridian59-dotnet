@@ -469,6 +469,7 @@ namespace Meridian59.Data.Models
 
         public SubOverlay(byte[] Buffer, int StartIndex = 0)
         {
+            animation = new AnimationNone();
             ReadFrom(Buffer, StartIndex);
         }
 

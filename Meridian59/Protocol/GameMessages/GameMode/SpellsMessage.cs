@@ -59,12 +59,16 @@ namespace Meridian59.Protocol.GameMessages
 
             cursor += base.ReadFrom(Buffer, cursor);
 
+            if (cursor + TypeSizes.SHORT > Buffer.Length) { SpellObjects = new SpellObject[0]; return cursor - StartIndex; }
             ushort len = BitConverter.ToUInt16(Buffer, cursor);
             cursor += TypeSizes.SHORT;
 
+            // Sanity cap: a spell list never has more than 1024 entries.
+            if (len > 1024) len = 0;
             SpellObjects = new SpellObject[len];
             for (int i = 0; i < len; i++)
             {
+                if (cursor + TypeSizes.INT > Buffer.Length) break;
                 SpellObjects[i] = new SpellObject(Buffer, cursor);
                 cursor += SpellObjects[i].ByteLength;
             }

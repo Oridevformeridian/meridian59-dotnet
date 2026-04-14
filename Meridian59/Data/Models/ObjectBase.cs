@@ -73,8 +73,8 @@ namespace Meridian59.Data.Models
                 if (HasLight)
                     len += lightingInfo.ByteLength;
 
-#if OPENMERIDIAN
-                // OpenMeridian sends a 4-byte namecolor after flags, before lightingInfo.
+#if VANILLA || OPENMERIDIAN
+                // Server sends a 4-byte namecolor after flags, before lightingInfo.
                 len += TypeSizes.INT;
 #endif
 
@@ -106,8 +106,8 @@ namespace Meridian59.Data.Models
             flags.ReadFrom(Buffer, cursor);
             cursor += flags.ByteLength;
 
-#if OPENMERIDIAN
-            // OpenMeridian sends a 4-byte namecolor after flags, before lightingInfo.
+#if VANILLA || OPENMERIDIAN
+            // Server sends a 4-byte namecolor after flags, before lightingInfo.
             cursor += TypeSizes.INT;
 #endif
 
@@ -215,8 +215,8 @@ namespace Meridian59.Data.Models
 
             flags.ReadFrom(ref Buffer);
 
-#if OPENMERIDIAN
-            // OpenMeridian sends a 4-byte namecolor after flags, before lightingInfo.
+#if VANILLA || OPENMERIDIAN
+            // Server sends a 4-byte namecolor after flags, before lightingInfo.
             Buffer += TypeSizes.INT;
 #endif
 

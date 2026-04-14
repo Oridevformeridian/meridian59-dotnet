@@ -48,18 +48,21 @@ namespace Meridian59.Data.Models
         {
             int cursor = StartIndex;
 
-            cursor += base.ReadFrom(Buffer, cursor);                    // ID (4/8 bytes)           
+            cursor += base.ReadFrom(Buffer, cursor);                    // ID (4/8 bytes)
 
+            if (cursor + TypeSizes.SHORT > Buffer.Length) { name = String.Empty; flags = 0; return cursor - StartIndex; }
             ushort strlen = BitConverter.ToUInt16(Buffer, cursor);      // NameLEN (2 bytes)
             cursor += TypeSizes.SHORT;
 
+            if (cursor + strlen > Buffer.Length) strlen = (ushort)Math.Max(0, Buffer.Length - cursor);
             name = Util.Encoding.GetString(Buffer, cursor, strlen);  // Name (n bytes)
             cursor += strlen;
 
+            if (cursor >= Buffer.Length) { flags = 0; return cursor - StartIndex; }
             flags = Buffer[cursor];                                     // Flags (1 byte)
             cursor++;
 
-            return cursor - StartIndex; 
+            return cursor - StartIndex;
         }
 
         public override int WriteTo(byte[] Buffer, int StartIndex = 0)

@@ -67,18 +67,23 @@ namespace Meridian59.Protocol.GameMessages
 
             cursor += base.ReadFrom(Buffer, StartIndex);
 
+            if (cursor + TypeSizes.SHORT > Buffer.Length) { Names = new string[0]; return cursor - StartIndex; }
             ushort len = BitConverter.ToUInt16(Buffer, cursor);
             cursor += TypeSizes.SHORT;
 
+            // Sanity cap: lookup names list never has more than 1024 entries.
+            if (len > 1024) len = 0;
             Names = new string[len];
             for (int i = 0; i < len; i++)
             {
+                if (cursor + TypeSizes.SHORT > Buffer.Length) break;
                 ushort strlen = BitConverter.ToUInt16(Buffer, cursor);
                 cursor += TypeSizes.SHORT;
 
+                if (cursor + strlen > Buffer.Length) strlen = (ushort)Math.Max(0, Buffer.Length - cursor);
                 Names[i] = Util.Encoding.GetString(Buffer, cursor, strlen);
                 cursor += strlen;
-            } 
+            }
 
             return cursor - StartIndex;
         }

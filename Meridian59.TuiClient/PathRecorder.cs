@@ -40,6 +40,7 @@ namespace Meridian59.TuiClient
         {
             this.client = client;
             events = new List<PathEvent>();
+            client.Log("SYS", "PathRecorder initialized.");
         }
 
         public void Start(string filePath)
@@ -59,7 +60,11 @@ namespace Meridian59.TuiClient
 
         public void Record(string action, RoomObject avatar, string data = null)
         {
-            if (avatar == null) return;
+            if (avatar == null)
+            {
+                client.Log("SYS", $"PathRecorder: Skip recording {action} - avatar null");
+                return;
+            }
 
             var ev = new PathEvent
             {
@@ -71,6 +76,7 @@ namespace Meridian59.TuiClient
                 Data = data
             };
             events.Add(ev);
+            client.Log("SYS", $"PathRecorder: Recorded {action} at ({ev.X},{ev.Y})");
         }
 
         private void Save()
@@ -82,6 +88,7 @@ namespace Meridian59.TuiClient
                     var serializer = new DataContractJsonSerializer(typeof(List<PathEvent>));
                     serializer.WriteObject(stream, events);
                 }
+                client.Log("SYS", $"PathRecorder: Saved {events.Count} events to {filePath}");
             }
             catch (Exception ex)
             {

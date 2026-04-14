@@ -497,6 +497,10 @@ namespace Meridian59.Data.Models
             ID = nextID;
             nextID++;
 
+            animation = new AnimationNone();
+            source = new ObjectID(0);
+            target = new ObjectID(0);
+            lightingInfo = new LightingInfo();
             ReadFrom(Buffer, StartIndex);
         }
 

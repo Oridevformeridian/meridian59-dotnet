@@ -144,9 +144,9 @@ namespace Meridian59.Client
         /// <summary>
         /// Disconnects from the server and resets datalayer.
         /// </summary>
-        public virtual void Disconnect()
+        public virtual void Disconnect(string reason = "User Request")
         {
-            ServerConnection.Disconnect();
+            ServerConnection.Disconnect(reason);
 
             Data.Reset();
             Data.UIMode = UIMode.Login;
@@ -318,7 +318,7 @@ namespace Meridian59.Client
 
             if (ServerConnection != null)
             {
-                ServerConnection.Disconnect();
+                ServerConnection.Disconnect("Client Cleanup");
                 ServerConnection = null;
             }
 
@@ -541,7 +541,7 @@ namespace Meridian59.Client
         protected virtual void HandleClientPatchMessage(ClientPatchMessage Message)
         {
             // Disconnect from server.
-            Disconnect();
+            Disconnect("Client Patch Required");
 
             // Set UI mode to download.
             Data.UIMode = UIMode.Download;
@@ -578,8 +578,7 @@ namespace Meridian59.Client
         /// <param name="Message"></param>
         protected virtual void HandleLoginFailedMessage(LoginFailedMessage Message)
         {
-            if (ServerConnection != null)
-                ServerConnection.Disconnect();
+            Disconnect("Login Failed");
         }
 
         /// <summary>
@@ -588,8 +587,7 @@ namespace Meridian59.Client
         /// <param name="Message"></param>
         protected virtual void HandleNoCharactersMessage(NoCharactersMessage Message)
         {
-            if (ServerConnection != null)
-                ServerConnection.Disconnect();
+            Disconnect("No Characters on Account");
         }
 
         /// <summary>
@@ -1728,11 +1726,13 @@ namespace Meridian59.Client
                 ForceSend = true;
 
             // check for updaterate limit or override flag
-            if ((ForceSend && GameTick.SpanReqMove > 0) || GameTick.CanReqMove())
+            if (ForceSend || GameTick.CanReqMove())
             {
                 // get message instance
                 ReqMoveMessage message = MessagePool.PopReqMove(
                     X, Y, Speed, Data.RoomInformation.RoomID, Angle);
+
+                Log("MOVE", $"SEND ReqMove X={X} Y={Y} Spd={Speed} Room={Data.RoomInformation.RoomID} Ang={Angle} Force={ForceSend}");
 
                 // send/enqueue it (async)
                 ServerConnection.SendQueue.Enqueue(message);
