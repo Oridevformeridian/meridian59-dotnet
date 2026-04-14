@@ -128,6 +128,7 @@ namespace Meridian59.Protocol
         /// <summary>
         /// The packetcontroller used for parsing.
         /// </summary>
+        public MessageControllerClient MessageController => messageController;
         protected MessageControllerClient messageController;
 
         /// <summary>

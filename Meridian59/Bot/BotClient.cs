@@ -1,4 +1,4 @@
-﻿/*
+/*
  Copyright (c) 2012-2013 Clint Banzhaf
  This file is part of "Meridian59 .NET".
 
@@ -48,39 +48,30 @@ namespace Meridian59.Bot
     {
         #region Constants
         protected const int SLEEPAFTERERROR         = 5000;
-        protected const int FIRSTLOGROW             = 6;
-        protected const int LASTLOGROW              = 19;
-        protected const ConsoleColor COLORDEFAULT   = ConsoleColor.White;
-        protected const ConsoleColor COLORGOOD      = ConsoleColor.Green;
-        protected const ConsoleColor COLORWARN      = ConsoleColor.DarkYellow;
-        protected const ConsoleColor COLORERROR     = ConsoleColor.Red;
-        protected const string LOG_INITCONFIG       = "Initializing configuration.xml ...";
-        protected const string LOG_RELOADCONFIG     = "Reloading configuration.xml...";
-        protected const string LOG_USEREXIT         = "User exited the application.";
-        protected const string LOG_CREDENTIALSOK    = "Account credentials accepted.";
-        protected const string LOG_CREDENTIALSWRONG = "Your account credentials are not correct.";
-        protected const string LOG_WRONGRESVERSION  = "Your resource version in configuration.xml doesn't match this server.";
+
+        protected const string LOG_RELOADCONFIG     = "Reloading configuration.";
+        protected const string LOG_USEREXIT         = "User initiated exit.";
         protected const string LOG_NETERROR         = "Network interface malfunction.";
-        protected const string LOG_APPVERSIONERROR  = "Your major/minor versions in configuration.xml don't match this server.";
+        protected const string LOG_CREDENTIALSWRONG = "Login failed (wrong credentials).";
+        protected const string LOG_APPVERSIONERROR  = "Login failed (wrong application version).";
+        protected const string LOG_WRONGRESVERSION  = "Login failed (wrong resource version).";
+
+        protected const int FIRSTLOGROW             = 5;
+        protected const int LOGAREAWIDTH            = 78;
+        protected const int LOGAREAHEIGHT           = 15;
+
+        protected ConsoleColor COLORDEFAULT         = ConsoleColor.Gray;
+        protected ConsoleColor COLORGOOD            = ConsoleColor.Green;
+        protected ConsoleColor COLORWARN            = ConsoleColor.Yellow;
+        protected ConsoleColor COLORERROR           = ConsoleColor.Red;
         #endregion
 
-        /// <summary>First row used for log text output. Override in subclasses for dynamic layouts.</summary>
-        protected virtual int DynamicFirstLogRow => FIRSTLOGROW;
-
-        /// <summary>Last row used for log text output. Override in subclasses for dynamic layouts.</summary>
-        protected virtual int DynamicLastLogRow  => LASTLOGROW;
-
-        /// <summary>
-        /// Maximum characters per log line written to the console.
-        /// Defaults to the full buffer width minus borders.
-        /// Override in split-panel layouts to constrain output to the log panel only.
-        /// </summary>
-        protected virtual int LogLineWidth => Console.BufferWidth - 4;
-
+        #region Fields
         /// <summary>
         /// 
         /// </summary>
         protected StreamWriter logWriter;
+        protected StreamWriter metricsWriter;
 
         /// <summary>
         /// 
@@ -105,14 +96,10 @@ namespace Meridian59.Bot
         public LoadTestMetrics Metrics { get; } = new LoadTestMetrics();
 
         /// <summary>
-        /// Tracks when RTT was last sampled to avoid flooding the metrics with duplicate readings.
-        /// </summary>
-        private long lastRttSampleMs = 0;
-
-        /// <summary>
         /// Set this to true if you run the instance in a windows service environment.
         /// </summary>
         public bool IsService { get; set; }
+        #endregion
 
         /// <summary>
         /// Constructor
@@ -162,21 +149,25 @@ namespace Meridian59.Bot
             }
 
             // build line
-            Text = DateTime.Now.ToLongTimeString().PadRight(10) + ' ' + Type.PadRight(6) + ' ' + Text;
+            string formattedText = $"[{DateTime.Now:HH:mm:ss.fff}] {Type,-8} {Text}";
                         
             // log to file full output
             if (logWriter != null)         
-                logWriter.WriteLine(Text);
+            {
+                logWriter.WriteLine(formattedText);
+                logWriter.Flush();
+            }
             
             // CONSOLE OUTPUT (not for services)
             if (!IsService)
             {
                 // prepare text length
-                if (Text.Length > LogLineWidth)
-                    Text = Text.Substring(0, LogLineWidth - 3) + "...";
+                string consoleText = formattedText;
+                if (consoleText.Length > LogLineWidth)
+                    consoleText = consoleText.Substring(0, LogLineWidth - 3) + "...";
 
                 else
-                    Text = Text.PadRight(LogLineWidth);
+                    consoleText = consoleText.PadRight(LogLineWidth);
 
                 // set color
                 switch (Type)
@@ -200,7 +191,7 @@ namespace Meridian59.Bot
 
                 // log to console
                 Console.SetCursorPosition(2, logLine);
-                Console.Write(Text);
+                Console.Write(consoleText);
 
                 if (logLine < DynamicLastLogRow)
                 {
@@ -224,6 +215,23 @@ namespace Meridian59.Bot
         }
 
         /// <summary>
+        /// Formats a PI into a human-readable name based on current protocol mode.
+        /// </summary>
+        protected string GetMessageName(byte pi)
+        {
+            if (ServerConnection?.MessageController == null) return pi.ToString();
+            
+            if (ServerConnection.MessageController.Mode == ProtocolMode.Login)
+                return Enum.IsDefined(typeof(MessageTypeLoginMode), pi) 
+                    ? ((MessageTypeLoginMode)pi).ToString() 
+                    : $"LP_{pi}";
+            
+            return Enum.IsDefined(typeof(MessageTypeGameMode), (int)pi) 
+                ? ((MessageTypeGameMode)pi).ToString() 
+                : $"BP_{pi}";
+        }
+
+        /// <summary>
         /// Process message queues and record metrics.
         /// </summary>
         protected override void ProcessQueues()
@@ -241,8 +249,23 @@ namespace Meridian59.Bot
                 // Record metric for sending
                 double now = (double)System.Diagnostics.Stopwatch.GetTimestamp() / (double)System.Diagnostics.Stopwatch.Frequency * 1000.0;
                 double ts = (double)message.SendRecvTimestamp / (double)System.Diagnostics.Stopwatch.Frequency * 1000.0;
-                Metrics.Record($"Sent:{message.PI}", now - ts);
-                Log("METR", $"Sent:{message.PI} Latency:{now - ts:F2}ms");
+                double latency = now - ts;
+
+                string name = GetMessageName(message.PI);
+                
+                // Exclude noisy types from metrics gathering (standard movement/status)
+                if (message.PI != (byte)MessageTypeGameMode.ReqMove && 
+                    message.PI != (byte)MessageTypeGameMode.ReqTurn &&
+                    message.PI != (byte)MessageTypeGameMode.SendPlayer)
+                {
+                    Metrics.Record($"Sent:{name}", latency);
+                }
+
+                if (metricsWriter != null)
+                {
+                    metricsWriter.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] Sent:{name,-20} Latency:{latency,8:F2}ms");
+                    metricsWriter.Flush();
+                }
 
                 Data.LogOutgoingPacket(message); 
             }
@@ -253,8 +276,23 @@ namespace Meridian59.Bot
                 // Record metric for receiving
                 double now = (double)System.Diagnostics.Stopwatch.GetTimestamp() / (double)System.Diagnostics.Stopwatch.Frequency * 1000.0;
                 double ts = (double)message.SendRecvTimestamp / (double)System.Diagnostics.Stopwatch.Frequency * 1000.0;
-                Metrics.Record($"Recv:{message.PI}", now - ts);
-                Log("METR", $"Recv:{message.PI} Latency:{now - ts:F2}ms");
+                double latency = now - ts;
+
+                string name = GetMessageName(message.PI);
+
+                // Exclude noisy types from metrics gathering
+                if (message.PI != (byte)MessageTypeGameMode.Player && 
+                    message.PI != (byte)MessageTypeGameMode.Stat &&
+                    message.PI != (byte)MessageTypeGameMode.LightShading)
+                {
+                    Metrics.Record($"Recv:{name}", latency);
+                }
+
+                if (metricsWriter != null)
+                {
+                    metricsWriter.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] Recv:{name,-20} Latency:{latency,8:F2}ms");
+                    metricsWriter.Flush();
+                }
 
                 HandleGameMessage(message);       
             }
@@ -303,6 +341,11 @@ namespace Meridian59.Bot
                     // get logwriter
                     logWriter = new StreamWriter(Config.LogFile, false, Encoding.Default);
                     logWriter.AutoFlush = true;
+
+                    // get metricsWriter
+                    string metricsFile = Path.ChangeExtension(Config.LogFile, ".metrics.log");
+                    metricsWriter = new StreamWriter(metricsFile, false, Encoding.Default);
+                    metricsWriter.AutoFlush = true;
                 }
                 catch (Exception) { }
             }
@@ -379,7 +422,7 @@ namespace Meridian59.Bot
         /// <param name="Message"></param>
         protected override void HandleGetLoginMessage(GetLoginMessage Message)
         {
-            // answer with our account credentials
+            // send login message
             if (Config.SelectedConnectionInfo != null)
                 SendLoginMessage(Config.SelectedConnectionInfo.Username, Config.SelectedConnectionInfo.Password);
         }
@@ -390,7 +433,7 @@ namespace Meridian59.Bot
         /// <param name="Message"></param>
         protected override void HandleLoginOKMessage(LoginOKMessage Message)
         {
-            Log("SYS", LOG_CREDENTIALSOK);
+            Log("SYS", "Account credentials accepted.");
         }
 
         /// <summary>
@@ -407,14 +450,6 @@ namespace Meridian59.Bot
 
             Log("ERROR", LOG_CREDENTIALSWRONG);
             Thread.Sleep(SLEEPAFTERERROR);
-        }
-
-        /// <summary>
-        /// 
-        /// </summary>
-        /// <param name="Message"></param>
-        protected override void HandleLoginModeMessageMessage(LoginModeMessageMessage Message)
-        {           
         }
 
         /// <summary>
@@ -443,26 +478,28 @@ namespace Meridian59.Bot
         protected override void HandleCharactersMessage(CharactersMessage Message)
         {
             Log("SYS", "Received character list (" + Message.WelcomeInfo.Characters.Count + " characters).");
-            bool found = false;
 
-            if (Config.SelectedConnectionInfo != null)
+            bool found = false;
+            foreach (CharSelectItem character in Message.WelcomeInfo.Characters)
             {
-                // try to login the character which is defined in config
-                foreach (CharSelectItem character in Message.WelcomeInfo.Characters)
+                Log("SYS", character.Name + " (ID: " + character.ID + ")");
+
+                // look for character from config
+                if (Config.SelectedConnectionInfo != null &&
+                    character.Name.Equals(Config.SelectedConnectionInfo.Character, StringComparison.OrdinalIgnoreCase))
                 {
                     Log("SYS", "Found character on account: " + character.Name + " (ID: " + character.ID + ")");
-                    if (character.Name.ToLower() == Config.SelectedConnectionInfo.Character.ToLower())
-                    {
-                        if (!sentUseCharacter)
-                        {
-                            Log("SYS", "Logging in character " + character.Name);
 
-                            SendUseCharacterMessage(new ObjectID(character.ID), true);
-                            sentUseCharacter = true;
-                        }
-                        found = true;
-                        break;
+                    // character selection only once
+                    if (!sentSendCharacters)
+                    {
+                        Log("SYS", "Logging in character " + character.Name);
+
+                        // character select
+                        SendUseCharacterMessage(new ObjectID(character.ID), true, character.Name);
+                        sentSendCharacters = true;
                     }
+                    found = true;
                 }
             }
 
@@ -484,10 +521,17 @@ namespace Meridian59.Bot
         /// 
         /// </summary>
         /// <param name="Message"></param>
-        protected override void HandleQuitMessage(QuitMessage Message)
+        protected override void HandleGameStateMessage(GameStateMessage Message)
         {
-            base.HandleQuitMessage(Message);
-            sentUseCharacter = false;
+            base.HandleGameStateMessage(Message);
+
+            // if we have no avatar object yet, 
+            // the server will send character info after sending a position ack
+            if (Data.AvatarObject == null)
+            {
+                Log("DEBUG", "No avatar object, sending initial position ack (0,0) to trigger character info.");
+                SendReqMoveMessage(true);
+            }
         }
 
         /// <summary>
@@ -497,6 +541,17 @@ namespace Meridian59.Bot
         protected override void HandlePlayerMessage(PlayerMessage Message)
         {
             base.HandlePlayerMessage(Message);
+
+            // log
+            if (Config.SelectedConnectionInfo != null && Data.AvatarObject != null &&
+                Data.AvatarObject.Name.Equals(Config.SelectedConnectionInfo.Character, StringComparison.OrdinalIgnoreCase))
+            {
+                if (Data.AvatarObject != null)
+                {
+                    Log("DEBUG", "AvatarObject assigned to DataController. (ID: " + Data.AvatarObject.ID + ")");
+                }
+            }
+            
             Log("SYS", "Entered room: " + Message.RoomInfo.RoomName);
         }
 
@@ -504,293 +559,72 @@ namespace Meridian59.Bot
         /// 
         /// </summary>
         /// <param name="Message"></param>
-        protected virtual void HandleOfferMessage(OfferMessage Message)
+        protected override void HandleQuitMessage(QuitMessage Message)
+        {
+            // server confirms quit request
+            // close connection and exit
+            ServerConnection.Disconnect("Server confirmed quit");
+            IsRunning = false;
+        }
+
+        #region Observers
+        protected virtual void OnRoomObjectsListChanged(object sender, ListChangedEventArgs e)
         {
         }
 
-        /// <summary>
-        /// 
-        /// </summary>
-        /// <param name="Message"></param>
-        protected virtual void HandleCounterOfferMessage(CounterOfferMessage Message)
+        protected virtual void OnOnlinePlayersListChanged(object sender, ListChangedEventArgs e)
         {
         }
 
-        /// <summary>
-        /// 
-        /// </summary>
-        /// <param name="Message"></param>
-        protected virtual void HandleCreateMessage(CreateMessage Message)
-        {
-        }
-
-        /// <summary>
-        /// 
-        /// </summary>
-        /// <param name="Message"></param>
-        protected override void HandleSaidMessage(SaidMessage Message)
-        {
-            base.HandleSaidMessage(Message);
-
-            // check if this is a whisper to us
-            // by loooking for a substring in the plain rsc text
-            if (Message.Message.ResourceName.Contains("tells you"))
-            {
-                // log it
-                Log("CHAT", Message.Message.FullString);
-
-                // get the part that is within the " ", the real text
-                if (Message.Message.Variables.Count > 1 &&
-                    Message.Message.Variables[1].Type == InlineVariableType.String)
-                {
-                    // the whispered text within ""
-                    string text = (string)Message.Message.Variables[1].Data;
-
-                    // handle null
-                    if (text == null)
-                        return;
-
-                    // split up into words
-                    string[] words = text.ToLower().Split(' ');
-
-                    // need at least the commandword
-                    if (words.Length > 0)
-                    {
-                        // handle it
-                        ProcessCommand(Message.Message.SourceObjectID, words);
-                    }
-                }
-            }
-        }
-
-        /// <summary>
-        /// Override with main handler for received chat textcommands
-        /// </summary>
-        /// <param name="PartnerID">Command invoked by this (player) id</param>
-        /// <param name="Words">First elment is command name</param>
-        protected virtual void ProcessCommand(uint PartnerID, string[] Words)
-        {
-            if (Words.Length >= 2 && Words[0] == "!move")
-            {
-                if (Words[1] == "on")
-                {
-                    IsRandomMoving = true;
-                    Log("SYS", "Random movement enabled.");
-                }
-                else if (Words[1] == "off")
-                {
-                    IsRandomMoving = false;
-                    Log("SYS", "Random movement disabled.");
-                }
-            }
-        }
-
-        /// <summary>
-        /// 
-        /// </summary>
-        public override void Update()
-        {
-            base.Update();
-
-            // handle random movement
-            if (IsRandomMoving && Data.AvatarObject != null && !Data.AvatarObject.IsMoving)
-            {
-                // pick a random spot in the room
-                // Meridian 59 coordinates are usually 0-128
-                ushort x = (ushort)random.Next(20, 100);
-                ushort y = (ushort)random.Next(20, 100);
-                byte speed = (byte)random.Next(64, 255);
-
-                V2 destination = new V2(x, y);
-                Data.AvatarObject.StartMoveTo(ref destination, speed);
-
-                Log("BOT", "Random move to " + x + "/" + y + " with speed " + speed);
-            }
-
-            // update some values and read input for NON service instances
-            if (!IsService)
-            {
-                if (Data.AvatarObject != null)
-                    Console.Title = Data.AvatarObject.Name;
-
-                DrawRTT();
-
-                if (Console.KeyAvailable)
-                {
-                    ConsoleKeyInfo key = Console.ReadKey(true);
-
-                    ProcessKeyPress(key);
-                }
-            }
-        }
-
-        /// <summary>
-        /// 
-        /// </summary>
-        /// <param name="sender"></param>
-        /// <param name="e"></param>
-        protected void OnRoomObjectsListChanged(object sender, ListChangedEventArgs e)
-        {
-            switch (e.ListChangedType)
-            {
-                case ListChangedType.ItemAdded:
-                    OnRoomObjectAdded(Data.RoomObjects[e.NewIndex]);
-                    break;
-
-                case ListChangedType.ItemDeleted:
-                    OnRoomObjectRemoved(Data.RoomObjects.LastDeletedItem);
-                    break;
-
-                case ListChangedType.Reset:
-                    OnRoomObjectReset();
-                    break;
-
-                case ListChangedType.ItemChanged:
-                    OnRoomObjectChanged(Data.RoomObjects[e.NewIndex]);
-                    break;
-            }
-
-            
-            DrawCoordinates();
-        }
-
-        /// <summary>
-        /// Executed when roomobjectlist added an item
-        /// </summary>
-        /// <param name="RoomObject"></param>
-        protected virtual void OnRoomObjectAdded(RoomObject RoomObject)
-        {
-        }
-
-        /// <summary>
-        /// Executed when roomobject list removed an item
-        /// </summary>
-        /// <param name="RoomObject"></param>
-        protected virtual void OnRoomObjectRemoved(RoomObject RoomObject)
-        {
-        }
-
-        /// <summary>
-        /// Executed when roomobject list has been reset
-        /// </summary>
-        protected virtual void OnRoomObjectReset()
-        {
-        }
-
-        /// <summary>
-        /// Executed when roomobject list changed an item
-        /// </summary>
-        protected virtual void OnRoomObjectChanged(RoomObject RoomObject)
-        {
-        }
-
-        /// <summary>
-        /// 
-        /// </summary>
-        /// <param name="sender"></param>
-        /// <param name="e"></param>
-        protected virtual void OnRoomInformationPropertyChanged(object sender, PropertyChangedEventArgs e)
-        {
-            switch (e.PropertyName)
-            {
-                case RoomInfo.PROPNAME_ROOMNAME:
-                    DrawRoom();
-                    break;
-            }
-        }
-
-        /// <summary>
-        /// 
-        /// </summary>
-        /// <param name="sender"></param>
-        /// <param name="e"></param>
-        protected virtual void OnDataControllerPropertyChanged(object sender, PropertyChangedEventArgs e)
-        {
-            switch (e.PropertyName)
-            {
-                case DataController.PROPNAME_ISRESTING:
-                    DrawResting();
-                    break;
-
-                case DataController.PROPNAME_AVATAROBJECT:
-                    if (Data.AvatarObject != null)
-                    {
-                        Log("DEBUG", "AvatarObject assigned to DataController. (ID: " + Data.AvatarObject.ID + ")");
-                        Data.AvatarObject.PropertyChanged += OnAvatarPropertyChanged;
-                        DrawCoordinates();
-                        DrawCondition();
-                        DrawRoom();
-                    }
-                    break;
-            }
-        }
-
-        protected virtual void OnAvatarPropertyChanged(object sender, PropertyChangedEventArgs e)
-        {
-            switch (e.PropertyName)
-            {
-                case RoomObject.PROPNAME_COORDINATEX:
-                case RoomObject.PROPNAME_COORDINATEY:
-                case RoomObject.PROPNAME_ANGLE:
-                case RoomObject.PROPNAME_ANGLEUNITS:
-                    DrawCoordinates();
-                    break;
-            }
-        }
-
-        /// <summary>
-        /// 
-        /// </summary>
-        /// <param name="sender"></param>
-        /// <param name="e"></param>
-        protected virtual void OnAvatarConditionListChanged(object sender, ListChangedEventArgs e)
-        {
-            DrawCondition();
-        }
-
-        /// <summary>
-        /// 
-        /// </summary>
-        /// <param name="sender"></param>
-        /// <param name="e"></param>
         protected virtual void OnInventoryObjectsListChanged(object sender, ListChangedEventArgs e)
         {
-            DrawCash();
         }
 
-        /// <summary>
-        /// 
-        /// </summary>
-        /// <param name="sender"></param>
-        /// <param name="e"></param>
-        protected virtual void OnOnlinePlayersListChanged(object sender, ListChangedEventArgs e)
-        {            
+        protected virtual void OnAvatarConditionListChanged(object sender, ListChangedEventArgs e)
+        {
         }
 
-        /// <summary>
-        /// 
-        /// </summary>
-        protected override void Cleanup()
+        protected virtual void OnRoomInformationPropertyChanged(object sender, PropertyChangedEventArgs e)
+        {
+        }
+
+        protected virtual void OnDataControllerPropertyChanged(object sender, PropertyChangedEventArgs e)
+        {
+        }
+        #endregion
+
+        #region UI Properties
+        public abstract int LogLineWidth { get; }
+        public abstract int DynamicFirstLogRow { get; }
+        public abstract int DynamicLastLogRow { get; }
+        #endregion
+
+        public abstract void DrawBoxes();
+        public abstract void DrawResting();
+
+        public override void SendReqMoveMessage(bool ForceSend)
+        {
+            // random movement?
+            if (IsRandomMoving)
+            {
+                // TODO: random movement
+            }
+
+            base.SendReqMoveMessage(ForceSend);
+        }
+
+        public void Dispose()
         {
             if (logWriter != null)
             {
                 logWriter.Close();
                 logWriter = null;
             }
-
-            base.Cleanup();
-        }
-
-        /// <summary>
-        /// 
-        /// </summary>
-        public override void SendReqMoveMessage(bool ForceSend = false)
-        {
-            base.SendReqMoveMessage(ForceSend);
-        }
-
-        public void Dispose()
-        {
+            if (metricsWriter != null)
+            {
+                metricsWriter.Close();
+                metricsWriter = null;
+            }
         }
 
         #region Text UI
@@ -817,14 +651,14 @@ namespace Meridian59.Bot
                     break;
 
                 case ConsoleKey.M:
+                    // log reload
+                    Log("SYS", "Dumping metrics histogram...");
                     DumpMetrics();
                     break;
 
-                case ConsoleKey.G:
-                    DumpTimeSeries();
-                    break;
-
                 case ConsoleKey.S:
+                    // log reload
+                    Log("SYS", "Saving metrics to file...");
                     SaveMetrics();
                     break;
             }
@@ -841,17 +675,19 @@ namespace Meridian59.Bot
                 Log("METR", "No metrics collected yet.");
                 return;
             }
+
             foreach (string name in names)
             {
                 string output = Metrics.RenderHistogram(name);
-                LogMultiline("METR", output);
+                foreach (string line in output.Split('\n'))
+                    Log("METR", line);
             }
         }
 
         /// <summary>
         /// Logs all collected metrics as time-series line graphs to the console log area.
         /// </summary>
-        public void DumpTimeSeries()
+        public void DumpMetricsSeries()
         {
             List<string> names = Metrics.GetNames();
             if (names.Count == 0)
@@ -859,10 +695,12 @@ namespace Meridian59.Bot
                 Log("METR", "No metrics collected yet.");
                 return;
             }
+
             foreach (string name in names)
             {
                 string output = Metrics.RenderTimeSeries(name);
-                LogMultiline("METR", output);
+                foreach (string line in output.Split('\n'))
+                    Log("METR", line);
             }
         }
 
@@ -880,222 +718,15 @@ namespace Meridian59.Bot
 
             string timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
             string filename = "metrics_" + timestamp + ".txt";
-
-            // Place alongside the configured log file if one exists, else current dir
-            if (Config.HasLogFile())
-            {
-                string dir = Path.GetDirectoryName(Path.GetFullPath(Config.LogFile));
-                filename = Path.Combine(dir, filename);
-            }
-
             try
             {
                 Metrics.SaveToFile(filename);
-                Log("METR", "Metrics saved: " + filename);
+                Log("SYS", "Metrics saved to " + filename);
             }
             catch (Exception ex)
             {
                 Log("ERROR", "Failed to save metrics: " + ex.Message);
             }
-        }
-
-        /// <summary>
-        /// Splits a multi-line string and logs each line individually.
-        /// </summary>
-        private void LogMultiline(string type, string text)
-        {
-            foreach (string line in text.Split('\n'))
-            {
-                string trimmed = line.TrimEnd('\r');
-                if (trimmed.Length > 0)
-                    Log(type, trimmed);
-            }
-        }
-
-        /// <summary>
-        /// 
-        /// </summary>
-        public virtual void DrawCondition()
-        {
-            // don't do it for services
-            if (IsService)
-                return;
-
-            foreach (StatNumeric stat in Data.AvatarCondition)
-            {
-                string val = stat.ValueCurrent.ToString();
-                string max = stat.ValueMaximum.ToString();
-                string rendermax = stat.ValueRenderMax.ToString();
-
-                val = val.PadLeft(3);
-                max = max.PadRight(3);
-
-                switch (stat.Num)
-                {
-                    case StatNums.HITPOINTS:
-                        Console.SetCursorPosition(7, 1);                       
-                        Console.Write(val + '/' + max);
-                        break;
-
-                    case StatNums.MANA:
-                        Console.SetCursorPosition(7, 2);
-                        Console.Write(val + '/' + max);
-                        break;
-
-                    case StatNums.VIGOR:
-                        Console.SetCursorPosition(7, 3);
-                        Console.Write(val + '/' + rendermax);
-                        break;
-                }
-            }
-        }
-
-        /// <summary>
-        /// 
-        /// </summary>
-        public virtual void DrawRoom()
-        {
-            // don't do it for services
-            if (IsService)
-                return;
-
-            string room = Data.RoomInformation?.RoomName ?? "";
-
-            if (room.Length > 35)
-                room = room.Substring(0, 32) + "...";
-
-            else
-                room = room.PadRight(35);
-
-            Console.SetCursorPosition(23, 1);
-            Console.Write(room);
-        }
-
-        /// <summary>
-        /// 
-        /// </summary>
-        public virtual void DrawResting()
-        {
-            // don't do it for services
-            if (IsService)
-                return;
-
-            Console.SetCursorPosition(37, 3);
-            Console.Write(Data.IsResting.ToString().PadRight(8));
-        }
-
-        /// <summary>
-        /// 
-        /// </summary>
-        public virtual void DrawRTT()
-        {
-            // don't do it for services
-            if (IsService)
-                return;
-
-            Console.SetCursorPosition(22, 3);
-            Console.Write((ServerConnection.RTT.ToString() + "ms").PadRight(6));
-
-            // sample RTT into metrics once per second
-            long nowMs = DateTime.UtcNow.Ticks / TimeSpan.TicksPerMillisecond;
-            if (nowMs - lastRttSampleMs >= 1000)
-            {
-                lastRttSampleMs = nowMs;
-                Metrics.Record("rtt_ms", ServerConnection.RTT);
-            }
-        }
-
-        /// <summary>
-        /// 
-        /// </summary>
-        public virtual void DrawCash()
-        {
-            // don't do it for services
-            if (IsService)
-                return;
-
-            uint cash = 0;
-
-            InventoryObject inventoryObject = 
-                Data.InventoryObjects.GetItemByName("shilling", false);
-
-            if (inventoryObject != null)
-                cash = inventoryObject.Count;
-
-            Console.SetCursorPosition(50, 3);
-            Console.Write(cash.ToString().PadRight(9));
-        }
-
-        /// <summary>
-        /// 
-        /// </summary>
-        public virtual void DrawCoordinates()
-        {
-            // don't do it for services
-            if (IsService)
-                return;
-
-            if (Data.AvatarObject != null)
-            {
-                Console.SetCursorPosition(64, 1);
-                Console.Write(Data.AvatarObject.CoordinateX.ToString().PadRight(5));
-
-                Console.SetCursorPosition(73, 1);
-                Console.Write(Data.AvatarObject.CoordinateY.ToString().PadRight(5));
-            }
-        }
-
-        public void DrawDynamic(string Text)
-        {
-            // don't do it for services
-            if (IsService)
-                return;
-
-            Console.SetCursorPosition(61, 3);
-            Console.Write(Text.PadRight(17));
-        }
-
-        /// <summary>
-        /// 
-        /// </summary>
-        public virtual void DrawBoxes()
-        {
-            // don't do it for services
-            if (IsService)
-                return;
-
-            // 1. Header
-
-            Console.SetCursorPosition(0, 0);
-            Console.Write("╔══════════════╦═══════════════════════════════════════════╦═══════════════════╗");
-
-            Console.SetCursorPosition(0, 1);
-            Console.Write("║ HP:  ---/--- ║ ROOM: ----------------------------------- ║ X: ----- Y: ----- ║");
-
-            Console.SetCursorPosition(0, 2);
-            Console.Write("║ MP:  ---/--- ╠═════════════╦═══════════════╦═════════════╬═══════════════════╣");
-
-            Console.SetCursorPosition(0, 3);
-            Console.Write("║ VIG: ---/--- ║ RTT: ----ms ║ REST: ------- ║ $: -------- ║                   ║");
-
-            Console.SetCursorPosition(0, 4);
-            Console.Write("╠══════════════╩═════════════╩═══════════════╩═════════════╩═══════════════════╣");
-
-            // 2. Log area
-            for (int i = 5; i < 21; i++)
-            {
-                Console.SetCursorPosition(0, i);
-                Console.Write("║                                                                              ║");
-            }
-
-            Console.SetCursorPosition(0, 21);
-            Console.Write("╠══════════════╦══════════════════╦════════════════════╦═══════════════════════╣");
-            
-            Console.SetCursorPosition(0, 22);
-            Console.Write("║ [Q]uit       ║ [R]eload config  ║ [M]etrics [G]raph  ║ [S]ave metrics        ║");
-
-            Console.SetCursorPosition(0, 23);
-            Console.Write("╚══════════════╩══════════════════╩════════════════════╩═══════════════════════╝");
         }
         #endregion
     }

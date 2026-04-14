@@ -59,14 +59,12 @@ namespace Meridian59.TuiClient
         private readonly object consoleLock = new object();
         private readonly object logLock = new object();
 
-        // Overrides to prevent base class drawing
-        public override void DrawCoordinates() { }
-        public override void DrawCondition() { }
-        public override void DrawRoom() { }
-        public override void DrawResting() { }
-        public override void DrawRTT() { }
-        public override void DrawCash() { }
+        // BotClient implementation
+        public override int LogLineWidth => LEFT_PANEL_WIDTH;
+        public override int DynamicFirstLogRow => LOG_FIRST_ROW;
+        public override int DynamicLastLogRow => Console.WindowHeight - 5;
         public override void DrawBoxes() { }
+        public override void DrawResting() { }
 
         // Scrollback ringbuffer
         private const int LOG_CAPACITY = 500;
@@ -250,8 +248,23 @@ namespace Meridian59.TuiClient
             {
                 double now = (double)System.Diagnostics.Stopwatch.GetTimestamp() / (double)System.Diagnostics.Stopwatch.Frequency * 1000.0;
                 double ts = (double)message.SendRecvTimestamp / (double)System.Diagnostics.Stopwatch.Frequency * 1000.0;
-                Metrics.Record($"Sent:{message.PI}", now - ts);
-                Log("METR", $"Sent:{message.PI} Latency:{now - ts:F2}ms");
+                double latency = now - ts;
+
+                string name = GetMessageName(message.PI);
+                
+                // Exclude noisy types from metrics gathering
+                if (message.PI != (byte)MessageTypeGameMode.ReqMove && 
+                    message.PI != (byte)MessageTypeGameMode.ReqTurn &&
+                    message.PI != (byte)MessageTypeGameMode.SendPlayer)
+                {
+                    Metrics.Record($"Sent:{name}", latency);
+                }
+
+                if (metricsWriter != null)
+                {
+                    metricsWriter.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] Sent:{name,-20} Latency:{latency,8:F2}ms");
+                    metricsWriter.Flush();
+                }
 
                 Data.LogOutgoingPacket(message); 
             }
@@ -261,8 +274,23 @@ namespace Meridian59.TuiClient
             {
                 double now = (double)System.Diagnostics.Stopwatch.GetTimestamp() / (double)System.Diagnostics.Stopwatch.Frequency * 1000.0;
                 double ts = (double)message.SendRecvTimestamp / (double)System.Diagnostics.Stopwatch.Frequency * 1000.0;
-                Metrics.Record($"Recv:{message.PI}", now - ts);
-                Log("METR", $"Recv:{message.PI} Latency:{now - ts:F2}ms");
+                double latency = now - ts;
+
+                string name = GetMessageName(message.PI);
+
+                // Exclude noisy types from metrics gathering
+                if (message.PI != (byte)MessageTypeGameMode.Player && 
+                    message.PI != (byte)MessageTypeGameMode.Stat &&
+                    message.PI != (byte)MessageTypeGameMode.LightShading)
+                {
+                    Metrics.Record($"Recv:{name}", latency);
+                }
+
+                if (metricsWriter != null)
+                {
+                    metricsWriter.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] Recv:{name,-20} Latency:{latency,8:F2}ms");
+                    metricsWriter.Flush();
+                }
 
                 HandleGameMessage(message);       
             }
@@ -692,11 +720,7 @@ namespace Meridian59.TuiClient
 
         public override void Log(string Type, string Text)
         {
-            if (logWriter != null)
-            {
-                logWriter.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] {Type,-8} {Text}");
-                logWriter.Flush();
-            }
+            base.Log(Type, Text);
 
             if (Type == "DEBUG" && HasTty) return;
 
@@ -1711,6 +1735,7 @@ namespace Meridian59.TuiClient
 
         public void Dispose()
         {
+            base.Dispose();
             Dispose(true);
             GC.SuppressFinalize(this);
         }
