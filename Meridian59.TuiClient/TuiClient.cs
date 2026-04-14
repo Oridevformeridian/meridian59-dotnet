@@ -626,28 +626,17 @@ namespace Meridian59.TuiClient
                         var roo = ri.ResourceRoom;
                         var box = roo.GetBoundingBox2D(true);
                         
-                        // Get 4 world corners of room in ROO units
-                        float[,] worldCorners = new float[4,2] {
-                            { (float)box.Min.X, (float)box.Min.Y },
-                            { (float)box.Max.X, (float)box.Min.Y },
-                            { (float)box.Min.X, (float)box.Max.Y },
-                            { (float)box.Max.X, (float)box.Max.Y }
-                        };
+                        // Origin of the room is ALWAYS North-West (Min X, Min Y) in world space
+                        float minX = (float)box.Min.X;
+                        float minY = (float)box.Min.Y;
                         
-                        // Find the "Anchor" (Top-Left) of the room in the current rotated VIEW space
-                        float minRX = float.MaxValue, minRY = float.MaxValue;
-                        for(int i=0; i<4; i++) {
-                            renderer.WorldToRotatedOnly(worldCorners[i,0], worldCorners[i,1], out float rx, out float ry);
-                            if (rx < minRX) minRX = rx;
-                            if (ry < minRY) minRY = ry;
-                        }
+                        // Player position in world space
+                        float px = avatar.CoordinateX * 16f - 1024f;
+                        float py = avatar.CoordinateY * 16f - 1024f;
                         
-                        // Player position in the same rotated VIEW space
-                        renderer.WorldToRotatedOnly(avatar.CoordinateX * 16f - 1024f, avatar.CoordinateY * 16f - 1024f, out float pRX, out float pRY);
-                        
-                        // Offset from the rotated anchor in 1024-unit grid squares
-                        float offX = pRX - minRX;
-                        float offY = pRY - minRY;
+                        // Offset from NW origin in 1024-unit grid squares
+                        float offX = px - minX;
+                        float offY = py - minY;
                         
                         int col = (int)(offX / 1024) + 1;
                         int row = (int)(offY / 1024) + 1;
@@ -1419,6 +1408,20 @@ namespace Meridian59.TuiClient
                 return;
             }
 
+            if (text.Equals("dump room", StringComparison.OrdinalIgnoreCase))
+            {
+                var ri = Data.RoomInformation;
+                if (ri != null && ri.ResourceRoom != null)
+                {
+                    var roo = ri.ResourceRoom;
+                    var box = roo.GetBoundingBox2D(true);
+                    Log("SYS", $"Room {ri.RoomID} ({roo.Filename}) Bounds: Min({box.Min.X},{box.Min.Y}) Max({box.Max.X},{box.Max.Y})");
+                    Log("SYS", $"Walls: {roo.Walls.Count} Sectors: {roo.Sectors.Count}");
+                }
+                else Log("ERROR", "No room data available.");
+                return;
+            }
+
             if (text.StartsWith("record ", StringComparison.OrdinalIgnoreCase))
             {
                 string filename = text[7..].Trim();
@@ -1653,7 +1656,9 @@ namespace Meridian59.TuiClient
                 {
                     bool isPassable = (wall.LeftSide != null && wall.LeftSide.Flags.IsPassable) ||
                                       (wall.RightSide != null && wall.RightSide.Flags.IsPassable);
-                    if (isPassable)
+                    bool isOuterWall = wall.LeftSectorNum == 0 || wall.RightSectorNum == 0;
+
+                    if (isPassable || isOuterWall)
                     {
                         int uc;
                         var p1 = wall.P1;
@@ -1671,10 +1676,15 @@ namespace Meridian59.TuiClient
                 }
                 if (nearestWall != null)
                 {
+                    Log("MOVE", $"Snapping to wall {nearestWall.Num} at ({snapPoint.X:F1},{snapPoint.Y:F1}) - Distance: {Math.Sqrt(minDist2):F1}");
                     snapPoint.ConvertToWorld();
                     avatar.Position3D = new V3(snapPoint.X, avatar.Position3D.Y, snapPoint.Y);
                     avatar.UpdatePosition(10, Data.RoomInformation);
                     SendPositionBefore = true;
+                }
+                else
+                {
+                    Log("MOVE", "No passable wall found within snapping range.");
                 }
             }
             if (isRecording) recorder.Record("Go", avatar, $"X:{avatar.CoordinateX},Y:{avatar.CoordinateY}");
