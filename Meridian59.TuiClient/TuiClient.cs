@@ -225,13 +225,6 @@ namespace Meridian59.TuiClient
                     DrawInputField();
                 }
             }
-
-            // Periodically poll for stats to ensure HP/MP/VIG stay updated
-            if (Data.UIMode == UIMode.Playing && GameTick.CanReqUserCommand())
-            {
-                SendSendPlayer();
-                GameTick.DidReqUserCommand();
-            }
         }
 
         protected override void ProcessQueues()
