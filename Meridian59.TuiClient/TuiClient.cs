@@ -1661,7 +1661,7 @@ namespace Meridian59.TuiClient
             {
                 var pos2D = new V2(avatar.CoordinateX * 16f - 1024f, avatar.CoordinateY * 16f - 1024f);
                 RooWall nearestWall = null;
-                double minDist2 = 128.0 * 128.0; 
+                double minDist2 = 256.0 * 256.0; 
                 V2 snapPoint = pos2D;
                 foreach (var wall in CurrentRoom.Walls)
                 {
