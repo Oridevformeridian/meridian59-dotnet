@@ -256,8 +256,12 @@ namespace Meridian59.TuiClient
                     AutoTargetNearest();
                 if (currentHP >= 0) lastAvatarHP = currentHP;
             }
+
             else
             {
+                // NPC context targeting: auto-select the nearest NPC in front of the avatar
+                // (only when not locked onto a live hostile combat target)
+                UpdateNPCTarget();
                 lastAvatarHP = (int)(Data.AvatarCondition.GetItemByNum(1)?.ValueCurrent ?? -1);
             }
 
@@ -916,6 +920,53 @@ namespace Meridian59.TuiClient
         }
 
         // ── Combat ───────────────────────────────────────────────────────────────
+
+        private static float AngleDiff(float a, float b)
+        {
+            float d = a - b;
+            while (d >  MathF.PI) d -= 2 * MathF.PI;
+            while (d < -MathF.PI) d += 2 * MathF.PI;
+            return MathF.Abs(d);
+        }
+
+        private void UpdateNPCTarget()
+        {
+            // Don't override a live hostile combat target
+            var current = Data.TargetObject as RoomObject;
+            if (current != null && (current.Flags.IsCreature || current.Flags.IsAttackable))
+                return;
+
+            var avatar = Data.AvatarObject;
+            if (avatar == null) return;
+
+            // Avatar facing in radians (M59: 0=E,1024=S,2048=W,3072=N maps 1:1 to atan2 scale)
+            float facingRad = avatar.AngleUnits / 4096f * 2 * MathF.PI;
+            const float VIEW_ARC  = MathF.PI / 3f;  // ±60° forward cone
+            const float MAX_DIST  = 384f;            // ~6 tiles in KOD units (64/tile)
+
+            RoomObject nearest = null;
+            float minDist = MAX_DIST;
+
+            foreach (var obj in Data.RoomObjects.ToList())
+            {
+                if (!obj.Flags.IsNPC) continue;
+                float dx = obj.CoordinateX - avatar.CoordinateX;
+                float dz = obj.CoordinateY - avatar.CoordinateY;
+                float dist = MathF.Sqrt(dx * dx + dz * dz);
+                if (dist > MAX_DIST) continue;
+                float angleToObj = MathF.Atan2(dz, dx);
+                if (AngleDiff(angleToObj, facingRad) > VIEW_ARC) continue;
+                if (dist < minDist) { minDist = dist; nearest = obj; }
+            }
+
+            uint newID  = nearest?.ID ?? uint.MaxValue;
+            uint currID = current?.ID ?? uint.MaxValue;
+            if (newID != currID)
+            {
+                Data.TargetID = newID;
+                DrawStats();
+            }
+        }
 
         private void FaceTarget(RoomObject target)
         {
