@@ -182,6 +182,8 @@ namespace Meridian59.TuiClient
 
                 if (data != null)
                 {
+                    uint targetID = (data.TargetObject as RoomObject)?.ID ?? 0;
+
                     // Draw non-player objects first
                     foreach (var obj in data.RoomObjects.ToList())
                     {
@@ -190,8 +192,8 @@ namespace Meridian59.TuiClient
                         WorldToView(obj.CoordinateX * 16f - 1024f, obj.CoordinateY * 16f - 1024f, out int relX, out int relY);
                         if (relX >= 0 && relX < width && relY >= 1 && relY < height)
                         {
-                            ConsoleColor bg = GetBgColorForObject(obj);
-                            nextBuffer.Set(relX, relY, GetCharForObject(obj), 1.0f, GetColorForObject(obj), bg);
+                            var (ch, fg, bg) = GetDisplay(obj, obj.ID == targetID && targetID != 0);
+                            nextBuffer.Set(relX, relY, ch, 1.0f, fg, bg);
                         }
                     }
 
@@ -203,9 +205,8 @@ namespace Meridian59.TuiClient
                         WorldToView(obj.CoordinateX * 16f - 1024f, obj.CoordinateY * 16f - 1024f, out int relX, out int relY);
                         if (relX >= 0 && relX < width && relY >= 1 && relY < height)
                         {
-                            // Avatar direction arrow drawn in the block below; other players get grey highlight
                             if (!obj.IsAvatar)
-                                nextBuffer.Set(relX, relY, GetCharForObject(obj), 1.0f, GetColorForObject(obj), ConsoleColor.DarkGray);
+                                nextBuffer.Set(relX, relY, '@', 1.0f, ConsoleColor.White, ConsoleColor.DarkBlue);
                         }
                     }
                 }
@@ -342,39 +343,38 @@ namespace Meridian59.TuiClient
             }
         }
 
-        private char GetCharForObject(RoomObject obj)
+        private (char ch, ConsoleColor fg, ConsoleColor bg) GetDisplay(RoomObject obj, bool isTarget)
         {
-            if (obj.ID == 0) return ' ';
-            if (obj.IsAvatar) return '@';
-            if (obj.Flags.IsPlayer) return 'P';
-            if (obj.Flags.IsNPC) return 'N';
-            if (obj.Flags.IsCreature) return 'M';
-            if (obj.Flags.IsAttackable) return 'a';
-            if (obj.Flags.IsGettable) return 'i';
+            if (obj.ID == 0) return (' ', ConsoleColor.Gray, ConsoleColor.Black);
+
+            // Players: @ on blue tile (handled in render loop; avatar handled separately)
+            if (obj.Flags.IsPlayer)
+                return ('@', ConsoleColor.White, ConsoleColor.DarkBlue);
+
+            // Hostile mobs/creatures
+            if (obj.Flags.IsCreature || obj.Flags.IsAttackable)
+                return isTarget
+                    ? ('*', ConsoleColor.White,  ConsoleColor.Red)      // targeted: red box, white *
+                    : ('*', ConsoleColor.Black,   ConsoleColor.DarkRed); // untargeted: dark red box, black *
+
+            // Dialog NPCs
+            if (obj.Flags.IsNPC)
+                return isTarget
+                    ? ('*', ConsoleColor.White,   ConsoleColor.Yellow)   // NPC targeted: yellow box, white *
+                    : ('*', ConsoleColor.DarkBlue, ConsoleColor.Yellow);  // NPC idle: yellow box, blue *
+
+            // Items on the ground
+            if (obj.Flags.IsGettable) return ('i', ConsoleColor.Green, ConsoleColor.Black);
+
+            // Environmental objects
             if (obj.Name != null)
             {
-                if (obj.Name.Contains("door", StringComparison.OrdinalIgnoreCase)) return 'D';
-                if (obj.Name.Contains("chest", StringComparison.OrdinalIgnoreCase)) return 'C';
-                if (obj.Name.Contains("sign", StringComparison.OrdinalIgnoreCase)) return 'S';
+                if (obj.Name.Contains("door",  StringComparison.OrdinalIgnoreCase)) return ('D', ConsoleColor.DarkYellow, ConsoleColor.Black);
+                if (obj.Name.Contains("chest", StringComparison.OrdinalIgnoreCase)) return ('C', ConsoleColor.DarkYellow, ConsoleColor.Black);
+                if (obj.Name.Contains("sign",  StringComparison.OrdinalIgnoreCase)) return ('S', ConsoleColor.DarkGray,   ConsoleColor.Black);
             }
-            return '*';
-        }
 
-        private ConsoleColor GetColorForObject(RoomObject obj)
-        {
-            if (obj.IsAvatar) return ConsoleColor.White;
-            if (obj.Flags.IsPlayer) return ConsoleColor.Cyan;
-            if (obj.Flags.IsNPC) return ConsoleColor.Yellow;
-            if (obj.Flags.IsCreature) return ConsoleColor.Red;
-            if (obj.Flags.IsAttackable) return ConsoleColor.DarkRed;
-            if (obj.Flags.IsGettable) return ConsoleColor.Green;
-            return ConsoleColor.Magenta;
-        }
-
-        private ConsoleColor GetBgColorForObject(RoomObject obj)
-        {
-            if (obj.Flags.IsCreature || obj.Flags.IsAttackable) return ConsoleColor.DarkRed;
-            return ConsoleColor.Black;
+            return ('*', ConsoleColor.Magenta, ConsoleColor.Black);
         }
     }
 }

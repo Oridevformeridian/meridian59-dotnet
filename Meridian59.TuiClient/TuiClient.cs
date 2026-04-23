@@ -2173,6 +2173,10 @@ namespace Meridian59.TuiClient
                 return;
             }
 
+            // @ is shorthand for tell: "@PlayerName message"
+            if (text.StartsWith("@") && text.Length > 1 && text[1] != ' ')
+                text = "tell " + text[1..];
+
             if (text.StartsWith("tell ", StringComparison.OrdinalIgnoreCase))
             {
                 string[] parts = text[5..].Split(new[] { ' ' }, 2);
