@@ -28,8 +28,13 @@ namespace Meridian59.TuiClient
         NewsList,
         NewsRead,
         NewsCompose,
-        CharSheet
+        CharSheet,
+        Login,
+        CharSelect,
+        NewChar
     }
+
+    public enum NewCharTab { Stats = 0, Skills = 1, Spells = 2, Looks = 3 }
 
     public enum CharTab { Stats = 0, Skills = 1, Spells = 2, Inventory = 3 }
 
@@ -85,6 +90,27 @@ namespace Meridian59.TuiClient
         private CharTab charTab = CharTab.Stats;
         private int charScrollOffset = 0;
         private int charSelectionIndex = 0;
+
+        // Login dialog state
+        private enum LoginField { Username, Password }
+        private LoginField loginField = LoginField.Username;
+        private string loginUsername = "";
+        private string loginPassword = "";
+
+        // Char select state
+        private List<Meridian59.Data.Models.CharSelectItem> charSelectList = new List<Meridian59.Data.Models.CharSelectItem>();
+
+        // New char creation popup state
+        private NewCharTab newCharTab = NewCharTab.Stats;
+        private int newCharSelectionIndex = 0;
+        private int newCharScrollOffset = 0;
+        private string newCharName = "";
+        private bool newCharNamingMode = false; // true = typing name
+        // Stat inline-edit mode: which stat row is being edited (-1 = none), and the buffer
+        private int newCharEditingStatIndex = -1;
+        private string newCharStatEditBuffer = "";
+        // Looks tab: selected preset index (0-4)
+        private int newCharLooksPreset = 0;
 
         // Combat state
         private bool autoAttack = false;
@@ -158,6 +184,45 @@ namespace Meridian59.TuiClient
         {
             Log("SYS", Message.Description);
             base.HandleLoginModeMessage(Message);
+        }
+
+        protected override void HandleGetLoginMessage(GetLoginMessage Message)
+        {
+            // If credentials already configured, use them directly (BotClient base behaviour)
+            string user = Config.SelectedConnectionInfo?.Username;
+            string pass = Config.SelectedConnectionInfo?.Password;
+            if (!string.IsNullOrEmpty(user) && !string.IsNullOrEmpty(pass))
+            {
+                SendLoginMessage(user, pass);
+                return;
+            }
+
+            // Otherwise show the interactive login popup
+            loginUsername = "";
+            loginPassword = "";
+            loginField = LoginField.Username;
+            activePopup = PopupMode.Login;
+            DrawMap();
+        }
+
+        protected override void HandleLoginOKMessage(LoginOKMessage Message)
+        {
+            Log("SYS", "Login accepted.");
+        }
+
+        protected override void HandleLoginFailedMessage(Meridian59.Protocol.GameMessages.LoginFailedMessage Message)
+        {
+            if (activePopup == PopupMode.Login)
+            {
+                loginPassword = "";
+                loginField = LoginField.Username;
+                Log("ERROR", "Login failed — check credentials.");
+                DrawMap();
+            }
+            else
+            {
+                base.HandleLoginFailedMessage(Message);
+            }
         }
 
         protected override void HandleLoginModeMessageMessage(LoginModeMessageMessage Message)
@@ -478,12 +543,9 @@ namespace Meridian59.TuiClient
         protected override void HandleCharactersMessage(CharactersMessage Message)
         {
             if (Data.UIMode == UIMode.Playing)
-            {
-                // Log("DEBUG", "Received character list while already playing. Likely protocol desync. Skipping.");
                 return;
-            }
 
-            // Custom selection logic
+            // Auto-select if a character is configured
             string targetChar = Config.SelectedConnectionInfo?.Character;
             if (!string.IsNullOrEmpty(targetChar))
             {
@@ -495,14 +557,24 @@ namespace Meridian59.TuiClient
                     return;
                 }
             }
-            
-                if (!string.IsNullOrEmpty(ScriptFile) && Message.WelcomeInfo.Characters.Count > 0)
+
+            // Script mode: auto-pick first character
+            if (!string.IsNullOrEmpty(ScriptFile) && Message.WelcomeInfo.Characters.Count > 0)
+            {
+                var fallback = Message.WelcomeInfo.Characters.FirstOrDefault(c => !c.IsEmptySlot);
+                if (fallback != null)
                 {
-                    var fallback = Message.WelcomeInfo.Characters[0];
                     Data.ExpectedAvatarName = fallback.Name;
                     SendUseCharacterMessage(new ObjectID(fallback.ID), true, fallback.Name);
                     return;
                 }
+            }
+
+            // Interactive: show character select popup
+            charSelectList = Message.WelcomeInfo.Characters.ToList();
+            popupSelectedIndex = 0;
+            activePopup = PopupMode.CharSelect;
+            DrawMap();
         }
 
         private uint lastLoggedRoomId = 0;
@@ -570,6 +642,19 @@ namespace Meridian59.TuiClient
             }
 
             base.HandleGameModeMessage(Message);
+
+            // After base has populated Data.CharCreationInfo, open the popup
+            if (pi == MessageTypeGameMode.CharInfo && charCreationState == CharCreationState.AwaitingCharInfo)
+            {
+                charCreationState = CharCreationState.None;
+                newCharTab = NewCharTab.Stats;
+                newCharSelectionIndex = -1;  // start on name field
+                newCharScrollOffset = 0;
+                newCharName = Data.CharCreationInfo.AvatarName ?? "";
+                newCharNamingMode = false;
+                activePopup = PopupMode.NewChar;
+                DrawMap();
+            }
         }
 
         // ── Layout ──────────────────────────────────────────────────────────────
@@ -1236,11 +1321,322 @@ namespace Meridian59.TuiClient
             }
         }
 
+        // ── Login dialog ─────────────────────────────────────────────────────────
+        private void DrawLoginDialog(int startX, int startY, int width, int height)
+        {
+            int w = Console.WindowWidth, h = Console.WindowHeight;
+            // Center a fixed-size box
+            int dlgW = Math.Min(50, w - 4);
+            int dlgH = 9;
+            int dlgX = (w - dlgW) / 2;
+            int dlgY = (h - dlgH) / 2;
+
+            Console.SetCursorPosition(dlgX, dlgY);
+            Console.ForegroundColor = ConsoleColor.Cyan;
+            Console.Write("╔" + new string('═', dlgW - 2) + "╗");
+            string title = " Meridian 59 Login ";
+            Console.SetCursorPosition(dlgX + (dlgW - title.Length) / 2, dlgY);
+            Console.Write(title);
+            for (int i = 1; i < dlgH - 1; i++)
+            {
+                Console.SetCursorPosition(dlgX, dlgY + i);
+                Console.Write("║" + new string(' ', dlgW - 2) + "║");
+            }
+            Console.SetCursorPosition(dlgX, dlgY + dlgH - 1);
+            string footer = " [Tab:Switch] [Enter:Login] [Esc:Quit] ";
+            Console.Write("╚" + new string('═', (dlgW - 2 - footer.Length) / 2) + footer + new string('═', dlgW - 2 - footer.Length - (dlgW - 2 - footer.Length) / 2) + "╝");
+            Console.ResetColor();
+
+            int cx = dlgX + 2, cw = dlgW - 4;
+            // Username row
+            Console.SetCursorPosition(cx, dlgY + 2);
+            Console.ForegroundColor = loginField == LoginField.Username ? ConsoleColor.White : ConsoleColor.Gray;
+            Console.Write("Username: ");
+            string udisp = loginUsername.Length > cw - 10 ? loginUsername[^(cw - 10)..] : loginUsername;
+            Console.Write((udisp + (loginField == LoginField.Username ? "_" : " ")).PadRight(cw - 10));
+            // Password row
+            Console.SetCursorPosition(cx, dlgY + 4);
+            Console.ForegroundColor = loginField == LoginField.Password ? ConsoleColor.White : ConsoleColor.Gray;
+            Console.Write("Password: ");
+            string pmask = new string('*', loginPassword.Length);
+            string pdisp = pmask.Length > cw - 10 ? pmask[^(cw - 10)..] : pmask;
+            Console.Write((pdisp + (loginField == LoginField.Password ? "_" : " ")).PadRight(cw - 10));
+            Console.ResetColor();
+
+            // Status hint
+            Console.SetCursorPosition(cx, dlgY + 6);
+            Console.ForegroundColor = ConsoleColor.DarkGray;
+            Console.Write("Enter credentials then press Enter to connect.".PadRight(cw));
+            Console.ResetColor();
+        }
+
+        // ── Character Select popup ────────────────────────────────────────────────
+        private void DrawCharSelectPopup(int startX, int startY, int width, int height)
+        {
+            int dlgW = Math.Min(60, Console.WindowWidth - 4);
+            int dlgH = Math.Min(charSelectList.Count + 7, Console.WindowHeight - 4);
+            int dlgX = (Console.WindowWidth  - dlgW) / 2;
+            int dlgY = (Console.WindowHeight - dlgH) / 2;
+
+            Console.ForegroundColor = ConsoleColor.Cyan;
+            Console.SetCursorPosition(dlgX, dlgY);
+            Console.Write("╔" + new string('═', dlgW - 2) + "╗");
+            string title = " Select Character ";
+            Console.SetCursorPosition(dlgX + (dlgW - title.Length) / 2, dlgY);
+            Console.Write(title);
+            for (int i = 1; i < dlgH - 1; i++)
+            {
+                Console.SetCursorPosition(dlgX, dlgY + i);
+                Console.Write("║" + new string(' ', dlgW - 2) + "║");
+            }
+            Console.SetCursorPosition(dlgX, dlgY + dlgH - 1);
+            string footer = " [↑↓:Select] [Enter:Play] [N:New] [Esc:Quit] ";
+            int fp = dlgW - 2 - footer.Length; if (fp < 0) { footer = footer[..(dlgW - 2)]; fp = 0; }
+            Console.Write("╚" + new string('═', fp / 2) + footer + new string('═', fp - fp / 2) + "╝");
+            Console.ResetColor();
+
+            int cx = dlgX + 2, cw = dlgW - 4, cy = dlgY + 2;
+            for (int i = 0; i < charSelectList.Count && cy + i < dlgY + dlgH - 1; i++)
+            {
+                var c = charSelectList[i];
+                Console.SetCursorPosition(cx, cy + i);
+                bool sel = i == popupSelectedIndex;
+                if (sel) Console.BackgroundColor = ConsoleColor.DarkBlue;
+                Console.ForegroundColor = c.IsEmptySlot ? ConsoleColor.DarkGray : ConsoleColor.White;
+                string label = c.IsEmptySlot ? $"  [ Empty Slot {i + 1} ]" : $"  {c.Name}";
+                Console.Write(label.PadRight(cw));
+                Console.ResetColor();
+            }
+        }
+
+        // ── New Character popup ───────────────────────────────────────────────────
+        private void DrawNewCharPopup(int startX, int startY, int width, int height)
+        {
+            var info = Data.CharCreationInfo;
+            if (info == null) return;
+
+            int dlgW = Math.Min(70, Console.WindowWidth - 4);
+            int dlgH = Console.WindowHeight - 4;
+            int dlgX = (Console.WindowWidth  - dlgW) / 2;
+            int dlgY = 2;
+
+            Console.ForegroundColor = ConsoleColor.Cyan;
+            Console.SetCursorPosition(dlgX, dlgY);
+            Console.Write("╔" + new string('═', dlgW - 2) + "╗");
+            string title = " Create Character ";
+            Console.SetCursorPosition(dlgX + (dlgW - title.Length) / 2, dlgY);
+            Console.Write(title);
+            for (int i = 1; i < dlgH - 1; i++)
+            {
+                Console.SetCursorPosition(dlgX, dlgY + i);
+                Console.Write("║" + new string(' ', dlgW - 2) + "║");
+            }
+            Console.SetCursorPosition(dlgX, dlgY + dlgH - 1);
+            string footer = newCharTab == NewCharTab.Stats
+                ? " [Tab:NextTab] [←/→:Gender] [↑↓:Navigate] [Enter:Edit] [Esc:Cancel] "
+                : newCharTab == NewCharTab.Looks
+                ? " [Tab:NextTab] [↑↓:Preset] [Enter:Create] [Esc:Cancel] "
+                : " [Tab:NextTab] [↑↓:Select] [Space:Toggle] [Enter:Create] [Esc:Cancel] ";
+            if (footer.Length > dlgW - 2) footer = footer[..(dlgW - 2)];
+            int fp = dlgW - 2 - footer.Length; if (fp < 0) fp = 0;
+            Console.Write("╚" + new string('═', fp / 2) + footer + new string('═', fp - fp / 2) + "╝");
+            Console.ResetColor();
+
+            // Tab bar
+            int tabX = dlgX + 1;
+            var tabs = new[] { ("STATS", NewCharTab.Stats), ("SKILLS", NewCharTab.Skills), ("SPELLS", NewCharTab.Spells), ("LOOKS", NewCharTab.Looks) };
+            Console.SetCursorPosition(tabX, dlgY + 1);
+            foreach (var (lbl, tab) in tabs)
+            {
+                Console.ForegroundColor = tab == newCharTab ? ConsoleColor.White : ConsoleColor.DarkGray;
+                Console.Write($"[{lbl}] ");
+            }
+            Console.ResetColor();
+
+            // Name field — selected when newCharSelectionIndex == -1
+            int cx = dlgX + 2, cw = dlgW - 4;
+            Console.SetCursorPosition(cx, dlgY + 2);
+            bool nameSelected = (newCharSelectionIndex == -1);
+            if (nameSelected) Console.BackgroundColor = ConsoleColor.DarkBlue;
+            Console.ForegroundColor = newCharNamingMode ? ConsoleColor.White : (nameSelected ? ConsoleColor.White : ConsoleColor.Gray);
+            string nameLabel = "Name: ";
+            string nameVal = newCharName + (newCharNamingMode ? "_" : (nameSelected && !newCharNamingMode ? " " : ""));
+            Console.Write((nameLabel + nameVal).PadRight(cw));
+            Console.ResetColor();
+
+            // Separator
+            Console.SetCursorPosition(dlgX, dlgY + 3);
+            Console.ForegroundColor = ConsoleColor.Cyan;
+            Console.Write("╠" + new string('═', dlgW - 2) + "╣");
+            Console.ResetColor();
+
+            int contentY = dlgY + 4;
+            int contentH = dlgH - 6;
+
+            if (newCharTab == NewCharTab.Stats)
+                DrawNewCharStats(cx, contentY, cw, contentH, info);
+            else if (newCharTab == NewCharTab.Skills)
+                DrawNewCharAbilities(cx, contentY, cw, contentH, info, isSpells: false);
+            else if (newCharTab == NewCharTab.Spells)
+                DrawNewCharAbilities(cx, contentY, cw, contentH, info, isSpells: true);
+            else
+                DrawNewCharLooks(cx, contentY, cw, contentH, info);
+        }
+
+        private void DrawNewCharStats(int cx, int cy, int cw, int ch, Meridian59.Data.Models.CharCreationInfo info)
+        {
+            // Gender line (row index -1, always above stats)
+            Console.SetCursorPosition(cx, cy);
+            Console.ForegroundColor = ConsoleColor.Gray;
+            string genderLine = $"Gender: {info.Gender,-8}  [← / → to change]";
+            Console.Write(genderLine.PadRight(cw));
+
+            // Stat rows
+            var stats = new (string Label, uint Value)[] {
+                ("Might",     info.Might),
+                ("Intellect", info.Intellect),
+                ("Stamina",   info.Stamina),
+                ("Agility",   info.Agility),
+                ("Mysticism", info.Mysticism),
+                ("Aim",       info.Aim),
+            };
+            uint avail = info.AttributesAvailable;
+            for (int i = 0; i < stats.Length && i < ch - 2; i++)
+            {
+                Console.SetCursorPosition(cx, cy + 2 + i);
+                bool sel = (i == newCharSelectionIndex);
+                bool editing = (i == newCharEditingStatIndex);
+                Console.ForegroundColor = sel ? ConsoleColor.White : ConsoleColor.Gray;
+                if (sel) Console.BackgroundColor = ConsoleColor.DarkBlue;
+
+                string valStr;
+                if (editing)
+                    valStr = newCharStatEditBuffer + "_";
+                else
+                    valStr = stats[i].Value.ToString();
+
+                string bar = editing ? "" : new string('█', (int)(stats[i].Value / 2));
+                string row = $"  {stats[i].Label,-12} {valStr,-6}  {bar,-25}";
+                Console.Write(row.PadRight(cw));
+                Console.ResetColor();
+            }
+            // Points remaining
+            Console.SetCursorPosition(cx, cy + 2 + stats.Length + 1);
+            Console.ForegroundColor = avail == 0 ? ConsoleColor.Green : ConsoleColor.Yellow;
+            Console.Write($"  Points remaining: {avail,3}  (sum must be {Meridian59.Data.Models.CharCreationInfo.ATTRIBUTE_MAXSUM})".PadRight(cw));
+            Console.ResetColor();
+        }
+
+        private void DrawNewCharAbilities(int cx, int cy, int cw, int ch, Meridian59.Data.Models.CharCreationInfo info, bool isSpells)
+        {
+            var available = isSpells
+                ? info.Spells.Cast<object>().ToList()
+                : info.Skills.Cast<object>().ToList();
+            var selected  = isSpells
+                ? info.SelectedSpells.Cast<object>().ToList()
+                : info.SelectedSkills.Cast<object>().ToList();
+
+            newCharSelectionIndex = Math.Clamp(newCharSelectionIndex, -1, Math.Max(0, available.Count - 1));
+
+            // Scroll to keep selection visible — but scroll offset must never go negative.
+            // When selection is -1 (name field), treat it as "above the list" and don't scroll.
+            if (newCharSelectionIndex >= 0)
+            {
+                if (newCharSelectionIndex < newCharScrollOffset) newCharScrollOffset = newCharSelectionIndex;
+                else if (newCharSelectionIndex >= newCharScrollOffset + ch) newCharScrollOffset = newCharSelectionIndex - ch + 1;
+            }
+            newCharScrollOffset = Math.Max(0, newCharScrollOffset);
+
+            uint spLeft = info.SkillPointsAvailable;
+            for (int i = 0; i < ch && (i + newCharScrollOffset) < available.Count; i++)
+            {
+                int idx = i + newCharScrollOffset;
+                var item = available[idx];
+                bool isSel = idx == newCharSelectionIndex;
+                bool isPicked = selected.Contains(item);
+
+                string name  = isSpells
+                    ? ((Meridian59.Data.Models.AvatarCreatorSpellObject)item).SpellName
+                    : ((Meridian59.Data.Models.AvatarCreatorSkillObject)item).SkillName;
+                uint cost    = isSpells
+                    ? ((Meridian59.Data.Models.AvatarCreatorSpellObject)item).SpellCost
+                    : ((Meridian59.Data.Models.AvatarCreatorSkillObject)item).SkillCost;
+
+                Console.SetCursorPosition(cx, cy + i);
+                if (isSel) Console.BackgroundColor = ConsoleColor.DarkBlue;
+                Console.ForegroundColor = isPicked ? ConsoleColor.Green : ConsoleColor.Gray;
+                string check = isPicked ? "✓" : " ";
+                string row = $"  {check} {name,-30} cost:{cost,3}";
+                Console.Write(row.PadRight(cw));
+                Console.ResetColor();
+            }
+            // Points footer
+            Console.SetCursorPosition(cx, cy + ch);
+            Console.ForegroundColor = spLeft == 0 ? ConsoleColor.Green : ConsoleColor.Yellow;
+            Console.Write($"  Skill points remaining: {spLeft,3}".PadRight(cw));
+            Console.ResetColor();
+        }
+
+        // 5 named appearance presets (pokemon-ish, legally distinct).
+        // Each tuple: (name, skinIdx, hairColorIdx, hairIdx, eyeIdx, noseIdx, mouthIdx)
+        // Indices wrap to pool size at apply-time so they're always safe.
+        private static readonly (string Name, string Desc, int Skin, int HairColor, int Hair, int Eye, int Nose, int Mouth)[] LooksPresets =
+        {
+            ("Torchic",  "Warm golden skin, auburn hair, wide curious eyes",    0, 2, 0, 0, 0, 1),
+            ("Mudkip",   "Pale complexion, slate-blue hair, round features",    2, 4, 1, 2, 1, 0),
+            ("Snorlix",  "Deep bronze tone, dark thick hair, heavy-lidded",     4, 0, 3, 3, 2, 2),
+            ("Vaporeen", "Ashen skin, silver-white hair, angular features",     1, 5, 2, 1, 0, 3),
+            ("Genblur",  "Olive complexion, jet-black hair, piercing gaze",     3, 1, 4, 4, 3, 1),
+        };
+
+        private void DrawNewCharLooks(int cx, int cy, int cw, int ch, Meridian59.Data.Models.CharCreationInfo info)
+        {
+            Console.SetCursorPosition(cx, cy);
+            Console.ForegroundColor = ConsoleColor.Gray;
+            Console.Write("Choose an appearance preset:".PadRight(cw));
+
+            for (int i = 0; i < LooksPresets.Length && i < ch - 2; i++)
+            {
+                Console.SetCursorPosition(cx, cy + 2 + i);
+                bool sel = (i == newCharLooksPreset);
+                Console.ForegroundColor = sel ? ConsoleColor.White : ConsoleColor.Gray;
+                if (sel) Console.BackgroundColor = ConsoleColor.DarkBlue;
+                string check = sel ? "▶" : " ";
+                string row = $"  {check} {LooksPresets[i].Name,-12}  {LooksPresets[i].Desc}";
+                Console.Write(row.PadRight(cw));
+                Console.ResetColor();
+            }
+
+            // Preview line
+            var p = LooksPresets[newCharLooksPreset];
+            Console.SetCursorPosition(cx, cy + 2 + LooksPresets.Length + 1);
+            Console.ForegroundColor = ConsoleColor.DarkCyan;
+            string preview = $"  Selected: {p.Name} — {p.Desc}";
+            if (preview.Length > cw) preview = preview[..cw];
+            Console.Write(preview.PadRight(cw));
+            Console.ResetColor();
+        }
+
         private void DrawPopup(int startX, int startY, int width, int height)
         {
             if (activePopup == PopupMode.CharSheet)
             {
                 DrawCharSheet(startX, startY, width, height);
+                return;
+            }
+            if (activePopup == PopupMode.Login)
+            {
+                DrawLoginDialog(startX, startY, width, height);
+                return;
+            }
+            if (activePopup == PopupMode.CharSelect)
+            {
+                DrawCharSelectPopup(startX, startY, width, height);
+                return;
+            }
+            if (activePopup == PopupMode.NewChar)
+            {
+                DrawNewCharPopup(startX, startY, width, height);
                 return;
             }
 
@@ -1391,6 +1787,239 @@ namespace Meridian59.TuiClient
 
         private void ProcessPopupKeyPress(ConsoleKeyInfo key)
         {
+            // ── Login dialog ─────────────────────────────────────────────────────
+            if (activePopup == PopupMode.Login)
+            {
+                if (newCharNamingMode) { /* not used here */ }
+                switch (key.Key)
+                {
+                    case ConsoleKey.Escape:
+                        IsRunning = false;
+                        break;
+                    case ConsoleKey.Tab:
+                        loginField = loginField == LoginField.Username ? LoginField.Password : LoginField.Username;
+                        DrawMap();
+                        break;
+                    case ConsoleKey.Enter:
+                        if (loginField == LoginField.Username)
+                        {
+                            loginField = LoginField.Password;
+                            DrawMap();
+                        }
+                        else if (!string.IsNullOrEmpty(loginUsername) && !string.IsNullOrEmpty(loginPassword))
+                        {
+                            // Close popup and send credentials
+                            activePopup = PopupMode.None;
+                            DrawMap();
+                            SendLoginMessage(loginUsername, loginPassword);
+                        }
+                        break;
+                    case ConsoleKey.Backspace:
+                        if (loginField == LoginField.Username && loginUsername.Length > 0)
+                            loginUsername = loginUsername[..^1];
+                        else if (loginField == LoginField.Password && loginPassword.Length > 0)
+                            loginPassword = loginPassword[..^1];
+                        DrawMap();
+                        break;
+                    default:
+                        if (!char.IsControl(key.KeyChar))
+                        {
+                            if (loginField == LoginField.Username) loginUsername += key.KeyChar;
+                            else loginPassword += key.KeyChar;
+                            DrawMap();
+                        }
+                        break;
+                }
+                return;
+            }
+
+            // ── Char Select ──────────────────────────────────────────────────────
+            if (activePopup == PopupMode.CharSelect)
+            {
+                switch (key.Key)
+                {
+                    case ConsoleKey.Escape:
+                        IsRunning = false;
+                        break;
+                    case ConsoleKey.UpArrow:
+                        popupSelectedIndex = Math.Max(0, popupSelectedIndex - 1);
+                        DrawMap();
+                        break;
+                    case ConsoleKey.DownArrow:
+                        popupSelectedIndex = Math.Min(charSelectList.Count - 1, popupSelectedIndex + 1);
+                        DrawMap();
+                        break;
+                    case ConsoleKey.Enter:
+                        if (charSelectList.Count > 0)
+                        {
+                            var sel = charSelectList[popupSelectedIndex];
+                            if (sel.IsEmptySlot)
+                            {
+                                // Request char creation info for this slot
+                                activePopup = PopupMode.None;
+                                charCreationState = CharCreationState.AwaitingCharInfo;
+                                SendSystemMessageSendCharInfo(sel.ID);
+                            }
+                            else
+                            {
+                                activePopup = PopupMode.None;
+                                popupJustClosed = true;
+                                Data.ExpectedAvatarName = sel.Name;
+                                SendUseCharacterMessage(new ObjectID(sel.ID), true, sel.Name);
+                            }
+                        }
+                        break;
+                    case ConsoleKey.N:
+                        // Pick the first empty slot and start new char
+                        var emptySlot = charSelectList.FirstOrDefault(c => c.IsEmptySlot);
+                        if (emptySlot != null)
+                        {
+                            activePopup = PopupMode.None;
+                            charCreationState = CharCreationState.AwaitingCharInfo;
+                            SendSystemMessageSendCharInfo(emptySlot.ID);
+                        }
+                        else Log("SYS", "No empty character slots available.");
+                        break;
+                }
+                return;
+            }
+
+            // ── New Character popup ───────────────────────────────────────────────
+            if (activePopup == PopupMode.NewChar)
+            {
+                var info = Data.CharCreationInfo;
+
+                // ── Name typing mode ─────────────────────────────────────────────
+                if (newCharNamingMode)
+                {
+                    switch (key.Key)
+                    {
+                        case ConsoleKey.Enter:
+                            newCharNamingMode = false;
+                            info.AvatarName = newCharName;
+                            DrawMap();
+                            break;
+                        case ConsoleKey.Escape:
+                            newCharNamingMode = false;
+                            DrawMap();
+                            break;
+                        case ConsoleKey.Backspace:
+                            if (newCharName.Length > 0) newCharName = newCharName[..^1];
+                            DrawMap();
+                            break;
+                        default:
+                            if (!char.IsControl(key.KeyChar)) { newCharName += key.KeyChar; DrawMap(); }
+                            break;
+                    }
+                    return;
+                }
+
+                // ── Stat inline-edit mode ────────────────────────────────────────
+                if (newCharEditingStatIndex >= 0)
+                {
+                    switch (key.Key)
+                    {
+                        case ConsoleKey.Enter:
+                            if (uint.TryParse(newCharStatEditBuffer, out uint v))
+                                AdjustNewCharStatAbsolute(info, newCharEditingStatIndex, v);
+                            newCharEditingStatIndex = -1;
+                            newCharStatEditBuffer = "";
+                            DrawMap();
+                            break;
+                        case ConsoleKey.Escape:
+                            newCharEditingStatIndex = -1;
+                            newCharStatEditBuffer = "";
+                            DrawMap();
+                            break;
+                        case ConsoleKey.Backspace:
+                            if (newCharStatEditBuffer.Length > 0) newCharStatEditBuffer = newCharStatEditBuffer[..^1];
+                            DrawMap();
+                            break;
+                        default:
+                            if (char.IsDigit(key.KeyChar) && newCharStatEditBuffer.Length < 3)
+                            { newCharStatEditBuffer += key.KeyChar; DrawMap(); }
+                            break;
+                    }
+                    return;
+                }
+
+                // ── Normal navigation ────────────────────────────────────────────
+                switch (key.Key)
+                {
+                    case ConsoleKey.Escape:
+                        activePopup = PopupMode.None;
+                        popupJustClosed = true;
+                        ResetCharCreation();
+                        DrawMap();
+                        break;
+                    case ConsoleKey.Tab:
+                        newCharTab = (NewCharTab)(((int)newCharTab + 1) % 4);
+                        newCharSelectionIndex = -1;  // back to name field on tab switch
+                        newCharScrollOffset = 0;
+                        DrawMap();
+                        break;
+                    case ConsoleKey.LeftArrow:
+                        if (newCharTab == NewCharTab.Stats)
+                        {
+                            info.SetExampleModel(Meridian59.Common.Enums.Gender.Male);
+                            DrawMap();
+                        }
+                        break;
+                    case ConsoleKey.RightArrow:
+                        if (newCharTab == NewCharTab.Stats)
+                        {
+                            info.SetExampleModel(Meridian59.Common.Enums.Gender.Female);
+                            DrawMap();
+                        }
+                        break;
+                    case ConsoleKey.UpArrow:
+                        if (newCharTab == NewCharTab.Looks)
+                            newCharLooksPreset = Math.Max(0, newCharLooksPreset - 1);
+                        else
+                            newCharSelectionIndex = Math.Max(-1, newCharSelectionIndex - 1);
+                        DrawMap();
+                        break;
+                    case ConsoleKey.DownArrow:
+                        if (newCharTab == NewCharTab.Looks)
+                            newCharLooksPreset = Math.Min(LooksPresets.Length - 1, newCharLooksPreset + 1);
+                        else
+                            newCharSelectionIndex++;
+                        DrawMap();
+                        break;
+                    case ConsoleKey.Spacebar:
+                        if (newCharTab == NewCharTab.Skills) ToggleNewCharAbility(info, newCharSelectionIndex, false);
+                        else if (newCharTab == NewCharTab.Spells) ToggleNewCharAbility(info, newCharSelectionIndex, true);
+                        DrawMap();
+                        break;
+                    case ConsoleKey.F2:
+                        newCharName = info.AvatarName ?? "";
+                        newCharNamingMode = true;
+                        DrawMap();
+                        break;
+                    case ConsoleKey.Enter:
+                        if (newCharSelectionIndex == -1)
+                        {
+                            // Name field selected — open naming mode
+                            newCharName = info.AvatarName ?? "";
+                            newCharNamingMode = true;
+                            DrawMap();
+                        }
+                        else if (newCharTab == NewCharTab.Stats && newCharSelectionIndex >= 0 && newCharSelectionIndex < 6)
+                        {
+                            // Open inline stat editor
+                            newCharStatEditBuffer = GetStatValue(info, newCharSelectionIndex).ToString();
+                            newCharEditingStatIndex = newCharSelectionIndex;
+                            DrawMap();
+                        }
+                        else
+                        {
+                            SubmitNewCharacter(info);
+                        }
+                        break;
+                }
+                return;
+            }
+
             if (activePopup == PopupMode.CharSheet)
             {
                 int pageSize = Math.Max(1, Console.WindowHeight - 13);
@@ -2258,6 +2887,99 @@ namespace Meridian59.TuiClient
             inputMode = false;
             inputBuffer = "";
             DrawInputField();
+        }
+
+        private static readonly string[] statNames = { "Might", "Intellect", "Stamina", "Agility", "Mysticism", "Aim" };
+
+        private uint GetStatValue(Meridian59.Data.Models.CharCreationInfo info, int idx) => idx switch
+        {
+            0 => info.Might,
+            1 => info.Intellect,
+            2 => info.Stamina,
+            3 => info.Agility,
+            4 => info.Mysticism,
+            5 => info.Aim,
+            _ => 0,
+        };
+
+        // Set a stat to an absolute value (model enforces sum/min/max constraints via its setter).
+        private void AdjustNewCharStatAbsolute(Meridian59.Data.Models.CharCreationInfo info, int idx, uint value)
+        {
+            uint clamped = Math.Clamp(value,
+                Meridian59.Data.Models.CharCreationInfo.ATTRIBUTE_MINVALUE,
+                Meridian59.Data.Models.CharCreationInfo.ATTRIBUTE_MAXVALUE);
+            switch (idx)
+            {
+                case 0: info.Might     = clamped; break;
+                case 1: info.Intellect = clamped; break;
+                case 2: info.Stamina   = clamped; break;
+                case 3: info.Agility   = clamped; break;
+                case 4: info.Mysticism = clamped; break;
+                case 5: info.Aim       = clamped; break;
+            }
+        }
+
+        // Kept for any existing callers; internally delegates to absolute setter via delta.
+        private void AdjustNewCharStat(Meridian59.Data.Models.CharCreationInfo info, int idx, int delta)
+        {
+            AdjustNewCharStatAbsolute(info, idx, (uint)Math.Max(0, (int)GetStatValue(info, idx) + delta));
+            DrawMap();
+        }
+
+        private void ToggleNewCharAbility(Meridian59.Data.Models.CharCreationInfo info, int idx, bool isSpells)
+        {
+            if (isSpells)
+            {
+                var list = info.Spells.ToList();
+                if (idx < 0 || idx >= list.Count) return;
+                var spell = list[idx];
+                if (info.SelectedSpells.Any(s => s.ExtraID == spell.ExtraID))
+                    info.SelectedSpells.RemoveAll(s => s.ExtraID == spell.ExtraID);
+                else
+                    info.SelectedSpells.Add(spell);
+            }
+            else
+            {
+                var list = info.Skills.ToList();
+                if (idx < 0 || idx >= list.Count) return;
+                var skill = list[idx];
+                if (info.SelectedSkills.Any(s => s.ExtraID == skill.ExtraID))
+                    info.SelectedSkills.RemoveAll(s => s.ExtraID == skill.ExtraID);
+                else
+                    info.SelectedSkills.Add(skill);
+            }
+        }
+
+        private void SubmitNewCharacter(Meridian59.Data.Models.CharCreationInfo info)
+        {
+            if (string.IsNullOrWhiteSpace(info.AvatarName))
+            {
+                Log("SYS", "Please enter a character name (press F2).");
+                return;
+            }
+            // Apply selected looks preset (indices wrap to pool size)
+            var p = LooksPresets[newCharLooksPreset];
+            int skinIdx      = info.SkinColors.Length      > 0 ? p.Skin      % info.SkinColors.Length      : 0;
+            int hairColorIdx = info.HairColors.Length      > 0 ? p.HairColor % info.HairColors.Length      : 0;
+            bool isMale      = info.Gender == Meridian59.Common.Enums.Gender.Male;
+            int hairIdx      = isMale
+                ? (info.MaleHairIDs.Length   > 0 ? p.Hair  % info.MaleHairIDs.Length   : 0)
+                : (info.FemaleHairIDs.Length > 0 ? p.Hair  % info.FemaleHairIDs.Length : 0);
+            int eyesIdx      = isMale
+                ? (info.MaleEyeIDs.Length    > 0 ? p.Eye   % info.MaleEyeIDs.Length    : 0)
+                : (info.FemaleEyeIDs.Length  > 0 ? p.Eye   % info.FemaleEyeIDs.Length  : 0);
+            int noseIdx      = isMale
+                ? (info.MaleNoseIDs.Length   > 0 ? p.Nose  % info.MaleNoseIDs.Length   : 0)
+                : (info.FemaleNoseIDs.Length > 0 ? p.Nose  % info.FemaleNoseIDs.Length : 0);
+            int mouthIdx     = isMale
+                ? (info.MaleMouthIDs.Length  > 0 ? p.Mouth % info.MaleMouthIDs.Length  : 0)
+                : (info.FemaleMouthIDs.Length> 0 ? p.Mouth % info.FemaleMouthIDs.Length: 0);
+            info.SetExampleModel(info.Gender, skinIdx, hairColorIdx, hairIdx, eyesIdx, noseIdx, mouthIdx);
+
+            activePopup = PopupMode.None;
+            popupJustClosed = true;
+            SendSystemMessageNewCharInfo();
+            ResetCharCreation();
         }
 
         private void HandleCharCreationInput(string text)
