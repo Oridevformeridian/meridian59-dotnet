@@ -31,7 +31,10 @@ namespace Meridian59.TuiClient
         CharSheet,
         Login,
         CharSelect,
-        NewChar
+        NewChar,
+        Buy,
+        Offer,
+        SpellTarget,
     }
 
     public enum NewCharTab { Stats = 0, Skills = 1, Spells = 2, Looks = 3 }
@@ -111,6 +114,20 @@ namespace Meridian59.TuiClient
         private string newCharStatEditBuffer = "";
         // Looks tab: selected preset index (0-4)
         private int newCharLooksPreset = 0;
+
+        // Buy popup state
+        private int buySelectedIndex = 0;
+        private string buyQuantityBuffer = "";  // non-empty = user is typing a quantity
+        private int buyQuantityItemIndex = -1;  // which item the quantity edit is for
+
+        // Offer popup state
+        private int offerSelectedIndex = 0;     // selection in your inventory list
+        private List<uint> offerPendingIDs = new List<uint>(); // items you've staged to offer
+
+        // Spell target picker state: pending cast that needs an inventory/room target
+        private uint spellTargetSpellID = 0;
+        private int spellTargetSelectedIndex = 0;
+        private bool spellTargetInventory = true; // true=inventory, false=room objects
 
         // Combat state
         private bool autoAttack = false;
@@ -653,6 +670,51 @@ namespace Meridian59.TuiClient
                 newCharName = Data.CharCreationInfo.AvatarName ?? "";
                 newCharNamingMode = false;
                 activePopup = PopupMode.NewChar;
+                DrawMap();
+            }
+
+            // Buy list arrived — open the buy popup
+            if (pi == MessageTypeGameMode.BuyList)
+            {
+                buySelectedIndex = 0;
+                buyQuantityItemIndex = -1;
+                buyQuantityBuffer = "";
+                activePopup = PopupMode.Buy;
+                DrawMap();
+            }
+
+            // Trade: incoming offer from another party — open offer popup
+            if (pi == MessageTypeGameMode.Offer)
+            {
+                offerSelectedIndex = 0;
+                offerPendingIDs.Clear();
+                activePopup = PopupMode.Offer;
+                DrawMap();
+            }
+
+            // Trade: echo of our items / counter-offer arrived — refresh if already open
+            if (pi == MessageTypeGameMode.Offered || pi == MessageTypeGameMode.CounterOffer
+                || pi == MessageTypeGameMode.CounterOffered)
+            {
+                if (activePopup != PopupMode.Offer)
+                {
+                    offerSelectedIndex = 0;
+                    offerPendingIDs.Clear();
+                    activePopup = PopupMode.Offer;
+                }
+                DrawMap();
+            }
+
+            // Trade cancelled by other party
+            if (pi == MessageTypeGameMode.OfferCanceled)
+            {
+                Log("SYS", "Trade offer cancelled by other party.");
+                if (activePopup == PopupMode.Offer)
+                {
+                    activePopup = PopupMode.None;
+                    popupJustClosed = true;
+                    offerPendingIDs.Clear();
+                }
                 DrawMap();
             }
         }
@@ -1370,6 +1432,239 @@ namespace Meridian59.TuiClient
             Console.ResetColor();
         }
 
+        // ── Buy popup ─────────────────────────────────────────────────────────────
+        private void DrawBuyPopup(int startX, int startY, int width, int height)
+        {
+            var buy = Data.Buy;
+            var items = buy?.Items?.ToList() ?? new List<Meridian59.Data.Models.TradeOfferObject>();
+            string vendor = buy?.TradePartner?.Name ?? "Merchant";
+
+            int dlgW = Math.Min(64, Console.WindowWidth - 4);
+            int dlgH = Math.Min(items.Count + 8, Console.WindowHeight - 4);
+            int dlgX = (Console.WindowWidth - dlgW) / 2;
+            int dlgY = Math.Max(1, (Console.WindowHeight - dlgH) / 2);
+
+            buySelectedIndex = Math.Clamp(buySelectedIndex, 0, Math.Max(0, items.Count - 1));
+
+            // Frame
+            Console.ForegroundColor = ConsoleColor.Yellow;
+            Console.SetCursorPosition(dlgX, dlgY);
+            string title = $" Buy from {vendor} ";
+            if (title.Length > dlgW - 4) title = title[..(dlgW - 4)];
+            Console.Write("╔" + new string('═', dlgW - 2) + "╗");
+            Console.SetCursorPosition(dlgX + (dlgW - title.Length) / 2, dlgY);
+            Console.Write(title);
+            for (int i = 1; i < dlgH - 1; i++)
+            {
+                Console.SetCursorPosition(dlgX, dlgY + i);
+                Console.Write("║" + new string(' ', dlgW - 2) + "║");
+            }
+            string footer = buyQuantityItemIndex >= 0
+                ? " Type qty + Enter to confirm, Esc to cancel "
+                : " [↑↓:Select] [Enter:Buy] [Esc:Close] ";
+            int fp = dlgW - 2 - footer.Length; if (fp < 0) { footer = footer[..(dlgW - 2)]; fp = 0; }
+            Console.SetCursorPosition(dlgX, dlgY + dlgH - 1);
+            Console.Write("╚" + new string('═', fp / 2) + footer + new string('═', fp - fp / 2) + "╝");
+            Console.ResetColor();
+
+            // Column headers
+            int cx = dlgX + 2, cw = dlgW - 4;
+            Console.SetCursorPosition(cx, dlgY + 1);
+            Console.ForegroundColor = ConsoleColor.DarkGray;
+            Console.Write($"  {"Item",-32} {"Price",8}".PadRight(cw));
+            Console.ResetColor();
+
+            // Separator
+            Console.SetCursorPosition(dlgX, dlgY + 2);
+            Console.ForegroundColor = ConsoleColor.Yellow;
+            Console.Write("╠" + new string('═', dlgW - 2) + "╣");
+            Console.ResetColor();
+
+            // Item rows
+            int listH = dlgH - 4;
+            int scrollOffset = Math.Max(0, buySelectedIndex - listH + 1);
+            for (int i = 0; i < listH && (i + scrollOffset) < items.Count; i++)
+            {
+                int idx = i + scrollOffset;
+                var item = items[idx];
+                bool sel = idx == buySelectedIndex;
+                Console.SetCursorPosition(cx, dlgY + 3 + i);
+                if (sel) Console.BackgroundColor = ConsoleColor.DarkBlue;
+                Console.ForegroundColor = sel ? ConsoleColor.White : ConsoleColor.Gray;
+
+                string nameStr = item.Name ?? "?";
+                if (nameStr.Length > 30) nameStr = nameStr[..30];
+
+                string rowRight;
+                if (sel && buyQuantityItemIndex == idx)
+                    rowRight = $"qty:{buyQuantityBuffer}_";
+                else
+                    rowRight = $"{item.Price,8}g";
+
+                string row = $"  {nameStr,-32} {rowRight}";
+                Console.Write(row.PadRight(cw));
+                Console.ResetColor();
+            }
+        }
+
+        // ── Offer popup ───────────────────────────────────────────────────────────
+        private void DrawOfferPopup(int startX, int startY, int width, int height)
+        {
+            var trade = Data.Trade;
+            var inventory = Data.InventoryObjects.ToList().OrderBy(o => o.Name).ToList();
+            string partner = trade?.TradePartner?.Name ?? "Partner";
+
+            int dlgW = Math.Min(64, Console.WindowWidth - 4);
+            int dlgH = Math.Min(Console.WindowHeight - 4, 24);
+            int dlgX = (Console.WindowWidth - dlgW) / 2;
+            int dlgY = Math.Max(1, (Console.WindowHeight - dlgH) / 2);
+
+            offerSelectedIndex = Math.Clamp(offerSelectedIndex, 0, Math.Max(0, inventory.Count - 1));
+
+            // Frame
+            Console.ForegroundColor = ConsoleColor.Magenta;
+            Console.SetCursorPosition(dlgX, dlgY);
+            string title = trade.IsBackgroundOffer ? $" Offer from {partner} " : $" Offer to {partner} ";
+            if (title.Length > dlgW - 4) title = title[..(dlgW - 4)];
+            Console.Write("╔" + new string('═', dlgW - 2) + "╗");
+            Console.SetCursorPosition(dlgX + (dlgW - title.Length) / 2, dlgY);
+            Console.Write(title);
+            for (int i = 1; i < dlgH - 1; i++)
+            {
+                Console.SetCursorPosition(dlgX, dlgY + i);
+                Console.Write("║" + new string(' ', dlgW - 2) + "║");
+            }
+            string footer = " [↑↓:Select] [Space:Stage] [A:Accept] [C:Cancel] [Esc:Close] ";
+            int fp = dlgW - 2 - footer.Length; if (fp < 0) { footer = footer[..(dlgW - 2)]; fp = 0; }
+            Console.SetCursorPosition(dlgX, dlgY + dlgH - 1);
+            Console.Write("╚" + new string('═', fp / 2) + footer + new string('═', fp - fp / 2) + "╝");
+            Console.ResetColor();
+
+            int cx = dlgX + 2, cw = dlgW - 4;
+            int half = (dlgH - 4) / 2;
+
+            // Their offer (top half)
+            Console.SetCursorPosition(cx, dlgY + 1);
+            Console.ForegroundColor = ConsoleColor.DarkGray;
+            Console.Write($"  They offer:".PadRight(cw));
+            Console.SetCursorPosition(dlgX, dlgY + 2);
+            Console.ForegroundColor = ConsoleColor.Magenta;
+            Console.Write("╠" + new string('═', dlgW - 2) + "╣");
+            Console.ResetColor();
+
+            var theirItems = trade?.ItemsPartner?.ToList() ?? new List<Meridian59.Data.Models.ObjectBase>();
+            for (int i = 0; i < half; i++)
+            {
+                Console.SetCursorPosition(cx, dlgY + 3 + i);
+                Console.ForegroundColor = ConsoleColor.Cyan;
+                if (i < theirItems.Count)
+                    Console.Write($"  {theirItems[i].Name}".PadRight(cw));
+                else
+                    Console.Write(new string(' ', cw));
+                Console.ResetColor();
+            }
+
+            // Separator
+            int midY = dlgY + 3 + half;
+            Console.SetCursorPosition(dlgX, midY);
+            Console.ForegroundColor = ConsoleColor.Magenta;
+            Console.Write("╠" + new string('═', dlgW - 2) + "╣");
+            Console.ResetColor();
+
+            // Your inventory / staged offer (bottom half)
+            Console.SetCursorPosition(cx, midY + 1);
+            Console.ForegroundColor = ConsoleColor.DarkGray;
+            Console.Write($"  Your offer — Space to stage/unstage:".PadRight(cw));
+            int invH = dlgH - 4 - half - 3;
+            int scrollOffset = Math.Max(0, offerSelectedIndex - invH + 1);
+            for (int i = 0; i < invH && (i + scrollOffset) < inventory.Count; i++)
+            {
+                int idx = i + scrollOffset;
+                var item = inventory[idx];
+                bool sel = idx == offerSelectedIndex;
+                bool staged = offerPendingIDs.Contains(item.ID);
+                Console.SetCursorPosition(cx, midY + 2 + i);
+                if (sel) Console.BackgroundColor = ConsoleColor.DarkBlue;
+                Console.ForegroundColor = staged ? ConsoleColor.Green : (sel ? ConsoleColor.White : ConsoleColor.Gray);
+                string check = staged ? "✓" : " ";
+                Console.Write($"  {check} {item.Name}".PadRight(cw));
+                Console.ResetColor();
+            }
+        }
+
+        // ── Spell target picker ───────────────────────────────────────────────────
+        private void DrawSpellTargetPopup(int startX, int startY, int width, int height)
+        {
+            var spell = Data.AvatarSpells.FirstOrDefault(s => s.ObjectID == spellTargetSpellID);
+            string spellName = spell?.ResourceName ?? "Spell";
+
+            var invItems  = Data.InventoryObjects.ToList().OrderBy(o => o.Name).ToList();
+            var roomItems = Data.RoomObjects.Where(o => o.ID != Data.AvatarID).ToList();
+            var items     = spellTargetInventory ? invItems.Cast<Meridian59.Data.Models.ObjectBase>().ToList()
+                                                 : roomItems.Cast<Meridian59.Data.Models.ObjectBase>().ToList();
+
+            int dlgW = Math.Min(60, Console.WindowWidth - 4);
+            int dlgH = Math.Min(items.Count + 8, Console.WindowHeight - 4);
+            int dlgX = (Console.WindowWidth - dlgW) / 2;
+            int dlgY = Math.Max(1, (Console.WindowHeight - dlgH) / 2);
+
+            spellTargetSelectedIndex = Math.Clamp(spellTargetSelectedIndex, 0, Math.Max(0, items.Count - 1));
+
+            // Frame
+            Console.ForegroundColor = ConsoleColor.Blue;
+            Console.SetCursorPosition(dlgX, dlgY);
+            string title = $" {spellName}: pick target ";
+            if (title.Length > dlgW - 4) title = title[..(dlgW - 4)];
+            Console.Write("╔" + new string('═', dlgW - 2) + "╗");
+            Console.SetCursorPosition(dlgX + (dlgW - title.Length) / 2, dlgY);
+            Console.Write(title);
+            for (int i = 1; i < dlgH - 1; i++)
+            {
+                Console.SetCursorPosition(dlgX, dlgY + i);
+                Console.Write("║" + new string(' ', dlgW - 2) + "║");
+            }
+            string footer = " [↑↓:Select] [Tab:Inv/Room] [Enter:Cast] [Esc:Cancel] ";
+            int fp = dlgW - 2 - footer.Length; if (fp < 0) { footer = footer[..(dlgW - 2)]; fp = 0; }
+            Console.SetCursorPosition(dlgX, dlgY + dlgH - 1);
+            Console.Write("╚" + new string('═', fp / 2) + footer + new string('═', fp - fp / 2) + "╝");
+            Console.ResetColor();
+
+            // Source toggle line
+            int cx = dlgX + 2, cw = dlgW - 4;
+            Console.SetCursorPosition(cx, dlgY + 1);
+            Console.ForegroundColor = ConsoleColor.DarkGray;
+            string srcLabel = spellTargetInventory ? "Source: [INVENTORY] / room" : "Source: inventory / [ROOM]";
+            Console.Write(srcLabel.PadRight(cw));
+
+            // Separator
+            Console.SetCursorPosition(dlgX, dlgY + 2);
+            Console.ForegroundColor = ConsoleColor.Blue;
+            Console.Write("╠" + new string('═', dlgW - 2) + "╣");
+            Console.ResetColor();
+
+            // Item list
+            int listH = dlgH - 4;
+            int scrollOffset = Math.Max(0, spellTargetSelectedIndex - listH + 1);
+            for (int i = 0; i < listH && (i + scrollOffset) < items.Count; i++)
+            {
+                int idx = i + scrollOffset;
+                var item = items[idx];
+                bool sel = idx == spellTargetSelectedIndex;
+                Console.SetCursorPosition(cx, dlgY + 3 + i);
+                if (sel) Console.BackgroundColor = ConsoleColor.DarkBlue;
+                Console.ForegroundColor = sel ? ConsoleColor.White : ConsoleColor.Gray;
+                Console.Write($"  {item.Name}".PadRight(cw));
+                Console.ResetColor();
+            }
+            if (items.Count == 0)
+            {
+                Console.SetCursorPosition(cx, dlgY + 3);
+                Console.ForegroundColor = ConsoleColor.DarkGray;
+                Console.Write("  (no targets available)".PadRight(cw));
+                Console.ResetColor();
+            }
+        }
+
         // ── Character Select popup ────────────────────────────────────────────────
         private void DrawCharSelectPopup(int startX, int startY, int width, int height)
         {
@@ -1637,6 +1932,21 @@ namespace Meridian59.TuiClient
             if (activePopup == PopupMode.NewChar)
             {
                 DrawNewCharPopup(startX, startY, width, height);
+                return;
+            }
+            if (activePopup == PopupMode.Buy)
+            {
+                DrawBuyPopup(startX, startY, width, height);
+                return;
+            }
+            if (activePopup == PopupMode.Offer)
+            {
+                DrawOfferPopup(startX, startY, width, height);
+                return;
+            }
+            if (activePopup == PopupMode.SpellTarget)
+            {
+                DrawSpellTargetPopup(startX, startY, width, height);
                 return;
             }
 
@@ -2020,6 +2330,188 @@ namespace Meridian59.TuiClient
                 return;
             }
 
+            // ── Buy popup ─────────────────────────────────────────────────────────
+            if (activePopup == PopupMode.Buy)
+            {
+                var items = Data.Buy?.Items?.ToList() ?? new List<Meridian59.Data.Models.TradeOfferObject>();
+                buySelectedIndex = Math.Clamp(buySelectedIndex, 0, Math.Max(0, items.Count - 1));
+
+                // Quantity edit mode
+                if (buyQuantityItemIndex >= 0)
+                {
+                    switch (key.Key)
+                    {
+                        case ConsoleKey.Enter:
+                            uint qty = 1;
+                            if (!uint.TryParse(buyQuantityBuffer, out qty) || qty < 1) qty = 1;
+                            var buyItem = items[buyQuantityItemIndex];
+                            SendReqBuyItemsMessage(Data.Buy.TradePartner.ID,
+                                new[] { new ObjectID(buyItem.ID, qty) });
+                            Log("SYS", $"Buying {qty}x {buyItem.Name} for {buyItem.Price * qty}g");
+                            buyQuantityItemIndex = -1;
+                            buyQuantityBuffer = "";
+                            DrawMap();
+                            break;
+                        case ConsoleKey.Escape:
+                            buyQuantityItemIndex = -1;
+                            buyQuantityBuffer = "";
+                            DrawMap();
+                            break;
+                        case ConsoleKey.Backspace:
+                            if (buyQuantityBuffer.Length > 0) buyQuantityBuffer = buyQuantityBuffer[..^1];
+                            DrawMap();
+                            break;
+                        default:
+                            if (char.IsDigit(key.KeyChar) && buyQuantityBuffer.Length < 4)
+                            { buyQuantityBuffer += key.KeyChar; DrawMap(); }
+                            break;
+                    }
+                    return;
+                }
+
+                switch (key.Key)
+                {
+                    case ConsoleKey.Escape:
+                        activePopup = PopupMode.None;
+                        popupJustClosed = true;
+                        DrawMap();
+                        break;
+                    case ConsoleKey.UpArrow:
+                        buySelectedIndex = Math.Max(0, buySelectedIndex - 1);
+                        DrawMap();
+                        break;
+                    case ConsoleKey.DownArrow:
+                        buySelectedIndex = Math.Min(items.Count - 1, buySelectedIndex + 1);
+                        DrawMap();
+                        break;
+                    case ConsoleKey.Enter:
+                        if (items.Count > 0)
+                        {
+                            buyQuantityItemIndex = buySelectedIndex;
+                            buyQuantityBuffer = "1";
+                            DrawMap();
+                        }
+                        break;
+                }
+                return;
+            }
+
+            // ── Offer popup ───────────────────────────────────────────────────────
+            if (activePopup == PopupMode.Offer)
+            {
+                var inventory = Data.InventoryObjects.ToList().OrderBy(o => o.Name).ToList();
+                offerSelectedIndex = Math.Clamp(offerSelectedIndex, 0, Math.Max(0, inventory.Count - 1));
+
+                switch (key.Key)
+                {
+                    case ConsoleKey.Escape:
+                        activePopup = PopupMode.None;
+                        popupJustClosed = true;
+                        offerPendingIDs.Clear();
+                        DrawMap();
+                        break;
+                    case ConsoleKey.UpArrow:
+                        offerSelectedIndex = Math.Max(0, offerSelectedIndex - 1);
+                        DrawMap();
+                        break;
+                    case ConsoleKey.DownArrow:
+                        offerSelectedIndex = Math.Min(inventory.Count - 1, offerSelectedIndex + 1);
+                        DrawMap();
+                        break;
+                    case ConsoleKey.Spacebar:
+                        if (inventory.Count > 0)
+                        {
+                            uint id = inventory[offerSelectedIndex].ID;
+                            if (offerPendingIDs.Contains(id)) offerPendingIDs.Remove(id);
+                            else offerPendingIDs.Add(id);
+                            DrawMap();
+                        }
+                        break;
+                    case ConsoleKey.Enter:
+                    case ConsoleKey.O:
+                        // Send the staged offer
+                        if (offerPendingIDs.Count > 0)
+                        {
+                            var offerObjs = offerPendingIDs
+                                .Select(id => new ObjectID(id, 1))
+                                .ToArray();
+                            if (Data.Trade.IsBackgroundOffer)
+                                SendReqCounterOffer(offerObjs);
+                            else
+                            {
+                                var partner = Data.Trade.TradePartner;
+                                if (partner != null)
+                                    SendReqOffer(new ObjectID(partner.ID), offerObjs);
+                            }
+                            Log("SYS", $"Offering {offerPendingIDs.Count} item(s).");
+                            offerPendingIDs.Clear();
+                            DrawMap();
+                        }
+                        break;
+                    case ConsoleKey.A:
+                        SendAcceptOffer();
+                        Log("SYS", "Offer accepted.");
+                        activePopup = PopupMode.None;
+                        popupJustClosed = true;
+                        offerPendingIDs.Clear();
+                        DrawMap();
+                        break;
+                    case ConsoleKey.C:
+                        SendCancelOffer();
+                        Log("SYS", "Offer cancelled.");
+                        activePopup = PopupMode.None;
+                        popupJustClosed = true;
+                        offerPendingIDs.Clear();
+                        DrawMap();
+                        break;
+                }
+                return;
+            }
+
+            // ── Spell target picker ───────────────────────────────────────────────
+            if (activePopup == PopupMode.SpellTarget)
+            {
+                var invItems  = Data.InventoryObjects.ToList().OrderBy(o => o.Name).Cast<Meridian59.Data.Models.ObjectBase>().ToList();
+                var roomItems = Data.RoomObjects.Where(o => o.ID != Data.AvatarID).Cast<Meridian59.Data.Models.ObjectBase>().ToList();
+                var items     = spellTargetInventory ? invItems : roomItems;
+                spellTargetSelectedIndex = Math.Clamp(spellTargetSelectedIndex, 0, Math.Max(0, items.Count - 1));
+
+                switch (key.Key)
+                {
+                    case ConsoleKey.Escape:
+                        activePopup = PopupMode.None;
+                        popupJustClosed = true;
+                        DrawMap();
+                        break;
+                    case ConsoleKey.Tab:
+                        spellTargetInventory = !spellTargetInventory;
+                        spellTargetSelectedIndex = 0;
+                        DrawMap();
+                        break;
+                    case ConsoleKey.UpArrow:
+                        spellTargetSelectedIndex = Math.Max(0, spellTargetSelectedIndex - 1);
+                        DrawMap();
+                        break;
+                    case ConsoleKey.DownArrow:
+                        spellTargetSelectedIndex = Math.Min(items.Count - 1, spellTargetSelectedIndex + 1);
+                        DrawMap();
+                        break;
+                    case ConsoleKey.Enter:
+                        if (items.Count > 0)
+                        {
+                            var target = items[spellTargetSelectedIndex];
+                            Data.TargetID = target.ID;
+                            SendReqCastMessage(spellTargetSpellID);
+                            Log("SYS", $"Casting on: {target.Name}");
+                            activePopup = PopupMode.None;
+                            popupJustClosed = true;
+                            DrawMap();
+                        }
+                        break;
+                }
+                return;
+            }
+
             if (activePopup == PopupMode.CharSheet)
             {
                 int pageSize = Math.Max(1, Console.WindowHeight - 13);
@@ -2081,8 +2573,23 @@ namespace Meridian59.TuiClient
                             int si = Math.Clamp(charSelectionIndex, 0, spells.Count - 1);
                             if (spells.Count > 0)
                             {
-                                SendReqCastMessage(spells[si].spell.ObjectID);
-                                Log("SYS", $"Casting: {spells[si].spell.ResourceName}");
+                                var chosen = spells[si].spell;
+                                // Find the SpellObject to check TargetsCount
+                                var spellObj = Data.SpellObjects.FirstOrDefault(s => s.ID == chosen.ObjectID);
+                                if (spellObj != null && spellObj.TargetsCount > 0)
+                                {
+                                    // Open target picker
+                                    spellTargetSpellID = chosen.ObjectID;
+                                    spellTargetSelectedIndex = 0;
+                                    spellTargetInventory = true;
+                                    activePopup = PopupMode.SpellTarget;
+                                    Log("SYS", $"Pick target for: {chosen.ResourceName}");
+                                }
+                                else
+                                {
+                                    SendReqCastMessage(chosen.ObjectID);
+                                    Log("SYS", $"Casting: {chosen.ResourceName}");
+                                }
                             }
                         }
                         else if (charTab == CharTab.Inventory)
@@ -2661,6 +3168,32 @@ namespace Meridian59.TuiClient
                 text.Equals("opendoor", StringComparison.OrdinalIgnoreCase))
             {
                 SendReqActivate();
+                return;
+            }
+
+            if (text.Equals("buy", StringComparison.OrdinalIgnoreCase))
+            {
+                SendReqBuyMessage();
+                return;
+            }
+
+            if (text.Equals("offer", StringComparison.OrdinalIgnoreCase) ||
+                text.Equals("trade", StringComparison.OrdinalIgnoreCase))
+            {
+                // Open offer popup with current target as trade partner
+                var target = Data.TargetObject;
+                if (target == null || !target.Flags.IsOfferable)
+                {
+                    Log("SYS", "No offerable target selected. Target an NPC or player first.");
+                    return;
+                }
+                offerSelectedIndex = 0;
+                offerPendingIDs.Clear();
+                // Seed the TradePartner so the popup header shows the right name
+                Data.Trade.TradePartner = target;
+                Data.Trade.IsBackgroundOffer = false;
+                activePopup = PopupMode.Offer;
+                DrawMap();
                 return;
             }
 
