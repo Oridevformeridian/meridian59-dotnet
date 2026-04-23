@@ -254,7 +254,7 @@ namespace Meridian59.Android.ChatClient
 
         }
 
-        protected override void HandleLoginModeMessageMessage(LoginModeMessageMessage Message)
+        protected override void HandleLoginModeMessage(LoginModeMessage Message)
         {
 
         }

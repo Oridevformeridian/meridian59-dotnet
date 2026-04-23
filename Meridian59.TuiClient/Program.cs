@@ -29,12 +29,14 @@ namespace Meridian59.TuiClient
                 {
                     client.NoAutoexec = noAutoexec;
                     client.ScriptFile = scriptFile;
-                    client.IsService = false;
+                    // IsService stays true (set in TuiClient ctor) so BotClient.Log
+                    // does not write raw console output that races with the TUI renderer.
                     client.Start(false);
 
                     while (client.IsRunning)
                     {
                         client.Tick();
+                        Thread.Sleep(10);
                     }
                 }
             }

@@ -61,11 +61,17 @@ namespace Meridian59.Protocol.GameMessages
 
             cursor += base.ReadFrom(Buffer, cursor);
 
+            if (cursor + TypeSizes.INT + TypeSizes.SHORT > Buffer.Length) return cursor - StartIndex;
+
             ObjectID = BitConverter.ToUInt32(Buffer, cursor);
             cursor += TypeSizes.INT;
             
             ushort len = BitConverter.ToUInt16(Buffer, cursor);
             cursor += TypeSizes.SHORT;
+
+            // Safety check
+            if (len > 100) len = 0;
+            if (cursor + (len * 4) > Buffer.Length) len = 0;
 
             Items = new ObjectID[len];
             for (int i = 0; i < len; i++)

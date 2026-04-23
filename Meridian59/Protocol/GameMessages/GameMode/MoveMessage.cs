@@ -148,6 +148,8 @@ namespace Meridian59.Protocol.GameMessages
         public MovementSpeed MovementSpeed { get; set; }
         public ushort Angle { get; set; }
 
+        public override string Description => $"Move: ID={ObjectID:X8}, X={NewCoordinateX}, Y={NewCoordinateY}, Speed={MovementSpeed}, Angle={Angle}";
+
         /// <summary>
         /// Tells whether the object should also be rotated
         /// to face the destination of the move.

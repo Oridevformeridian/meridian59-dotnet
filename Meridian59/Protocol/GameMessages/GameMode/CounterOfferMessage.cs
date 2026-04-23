@@ -18,6 +18,8 @@ using System;
 using Meridian59.Common.Constants;
 using Meridian59.Protocol.Enums;
 using Meridian59.Data.Models;
+using Meridian59.Common;
+using Meridian59.Common.Enums;
 
 namespace Meridian59.Protocol.GameMessages
 {
@@ -65,6 +67,13 @@ namespace Meridian59.Protocol.GameMessages
 
             ushort len = BitConverter.ToUInt16(Buffer, cursor);
             cursor += TypeSizes.SHORT;
+
+            if (len > 500)
+            {
+                Logger.Log("CounterOfferMessage", LogType.Error, $"Suspect item count: {len}. Skipping body.");
+                OfferedItems = new ObjectBase[0];
+                return cursor - StartIndex;
+            }
 
             OfferedItems = new ObjectBase[len];
             for (int i = 0; i < len; i++)

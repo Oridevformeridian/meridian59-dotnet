@@ -194,7 +194,9 @@ namespace Meridian59.Protocol
             if (Message.Header.IsTCP)
             {
                 if (CRCCreatorEnabled)
+                {
                     CRCCreator.CreatePacketCRC(Message, out dummy);
+                }
             }
             else
             {
@@ -239,19 +241,19 @@ namespace Meridian59.Protocol
                 e.MessageBuffer[MessageHeader.Tcp.HEADERLENGTH] :
                 e.MessageBuffer[MessageHeader.Udp.HEADERLENGTH];
 
-            Log("DEBUG", $"ExtractMessage: PI={(int)PI} Mode={Mode}");
+            byte decodedPI = PIDecoder.Decode(PI);
 
             // parse packet based on current protocol mode
             switch (Mode)
             {
                 // protocol mode Login
                 case ProtocolMode.Login:
-                    TypedMessage = ExtractLoginModeMessage(e, (MessageTypeLoginMode)PI);
+                    TypedMessage = ExtractLoginModeMessage(e, (MessageTypeLoginMode)decodedPI);
                     break;
 
                 // protocol mode Game
                 case ProtocolMode.Game:
-                    TypedMessage = ExtractGameModeMessage(e, (MessageTypeGameMode)PI);
+                    TypedMessage = ExtractGameModeMessage(e, (MessageTypeGameMode)decodedPI);
                     break;
             }
 

@@ -65,6 +65,8 @@ namespace Meridian59.Protocol.GameMessages
 
         public uint AvatarID { get; set; }
         public ushort ViewDir { get; set; }
+
+        public override string Description => $"ReqTurn: AvatarID={AvatarID:X8}, ViewDir={ViewDir}";
         
         public ReqTurnMessage(ushort ViewDir, uint AvatarID) 
             : base(MessageTypeGameMode.ReqTurn)

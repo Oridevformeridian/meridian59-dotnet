@@ -101,6 +101,27 @@ namespace Meridian59.Common
         }
 
         /// <summary>
+        /// Finds the actual case-sensitive path of a file on disk by searching the directory.
+        /// Useful for Linux where filenames might have different case than what the server expects.
+        /// </summary>
+        public static string GetActualPath(string folder, string file)
+        {
+            string path = Path.Combine(folder, file);
+            if (System.IO.File.Exists(path)) return path;
+
+            if (Directory.Exists(folder))
+            {
+                var files = Directory.GetFiles(folder);
+                foreach (var f in files)
+                {
+                    if (string.Equals(Path.GetFileName(f), file, StringComparison.OrdinalIgnoreCase))
+                        return f;
+                }
+            }
+            return path; // Fallback to original path if not found (will cause FileNotFound later)
+        }
+
+        /// <summary>
         /// Returns each byte of a 32-Bit integer.
         /// </summary>
         /// <param name="Value"></param>

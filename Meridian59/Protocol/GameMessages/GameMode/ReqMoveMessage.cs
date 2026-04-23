@@ -94,6 +94,8 @@ namespace Meridian59.Protocol.GameMessages
         public uint CurrentMapID { get; set; }
         public ushort Angle { get; set; }
 
+        public override string Description => $"ReqMove: X={X}, Y={Y}, Mode={MoveMode}, Map={CurrentMapID}, Angle={Angle}";
+
         public ReqMoveMessage(ushort X, ushort Y, byte MoveMode, uint CurrentMapID, ushort Angle) 
             : base(MessageTypeGameMode.ReqMove)
         {

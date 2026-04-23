@@ -30,7 +30,7 @@ namespace Meridian59.Protocol.GameMessages
         {
             get
             {
-                return base.ByteLength + TypeSizes.BYTE + Stat.ByteLength;
+                return base.ByteLength + TypeSizes.BYTE + (Stat != null ? Stat.ByteLength : 0);
             }
         }
 

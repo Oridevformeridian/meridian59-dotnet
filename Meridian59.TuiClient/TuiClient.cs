@@ -30,13 +30,43 @@ namespace Meridian59.TuiClient
         NewsCompose
     }
 
+    public enum CharCreationState
+    {
+        None,
+        AwaitingCharInfo,
+        Name,
+        Gender,
+        Stats,
+        Spells,
+        Review
+    }
+
+    public enum LogTab
+    {
+        Chat,
+        Network
+    }
+
     public class TuiClient : BotClient<GameTick, ResourceManager, DataController, TuiConfig>
     {
+        private LogTab activeTab = LogTab.Chat;
         private AsciiRenderer renderer;
         private PathRecorder recorder;
         private bool isRecording = false;
         private string recordingFile = null;
         private bool isNoClip = false;
+        private bool isRunning = false;
+
+        // Movement constants matching original clientd3d/move.c / draw3d.h
+        // MOVEUNITS = FINENESS >> 2 = 256 CLIENT_FINE = 16 World units
+        // MOVE_DELAY = 100ms minimum between steps
+        // Walk speed byte = 18, Run = 36 (2x walk) per original RequestMove
+        private const float WORLD_STEP_WALK = 0.25f;
+        private const float WORLD_STEP_RUN  = 0.5f;
+        private const byte  SPEED_WALK      = 18;
+        private const byte  SPEED_RUN       = 36;
+        private const int   MOVE_DELAY_MS   = 100;
+        private DateTime lastMoveTime = DateTime.MinValue;
 
         private int lastWindowWidth;
         private int lastWindowHeight;
@@ -44,6 +74,7 @@ namespace Meridian59.TuiClient
 
         // UI State
         private PopupMode activePopup = PopupMode.None;
+        private CharCreationState charCreationState = CharCreationState.None;
         private int popupSelectedIndex = 0;
         private int popupScrollOffset = 0;
         private object currentPopupItem = null;
@@ -66,10 +97,12 @@ namespace Meridian59.TuiClient
         public override void DrawBoxes() { }
         public override void DrawResting() { }
 
-        // Scrollback ringbuffer
+        // Scrollback ringbuffers
         private const int LOG_CAPACITY = 500;
         private readonly List<LogEntry> logBuffer = new List<LogEntry>(LOG_CAPACITY + 1);
+        private readonly List<LogEntry> netBuffer = new List<LogEntry>(LOG_CAPACITY + 1);
         private int scrollOffset = 0;   // 0 = newest at bottom, positive = scrolled back
+        private int netScrollOffset = 0;
 
         public struct LogEntry
         {
@@ -111,13 +144,19 @@ namespace Meridian59.TuiClient
             Log("ERROR", "Connection error: " + Error.Message);
         }
 
+        protected override void HandleLoginModeMessage(LoginModeMessage Message)
+        {
+            Log("SYS", Message.Description);
+            base.HandleLoginModeMessage(Message);
+        }
+
         protected override void HandleLoginModeMessageMessage(LoginModeMessageMessage Message)
         {
             Log("SYS", Message.Message);
         }
         #endregion
 
-        private bool HasTty => Console.WindowWidth > 0 && Console.WindowHeight > 0;
+        private bool HasTty => string.IsNullOrEmpty(ScriptFile) && Console.WindowWidth > 0 && Console.WindowHeight > 0;
 
         // Row just above the input separator — last writable log row is LogBottom-1.
         private int LogBottom => Console.WindowHeight - 4;
@@ -214,16 +253,14 @@ namespace Meridian59.TuiClient
 
                 if (layoutChanged)
                 {
+                    renderer.Invalidate();
                     Console.Clear();
                     DrawTuiLayout();
                 }
-                else
-                {
-                    DrawStats();
-                    DrawRoomInfo();
-                    DrawMap();
-                    DrawInputField();
-                }
+                DrawStats();
+                DrawRoomInfo();
+                DrawMap();
+                DrawInputField();
             }
         }
 
@@ -306,8 +343,6 @@ namespace Meridian59.TuiClient
 
         protected override void HandleGameStateMessage(GameStateMessage Message)
         {
-            Log("SYS", "TESTING LOG: HandleGameStateMessage");
-            Log("SYS", "GameStateMessage received, entering Game mode.");
             base.HandleGameStateMessage(Message);
             if (!NoAutoexec)
             {
@@ -323,9 +358,7 @@ namespace Meridian59.TuiClient
         {
             if (File.Exists(path))
             {
-                Log("SYS", $"Loading script from {path}...");
                 string[] lines = File.ReadAllLines(path);
-                Log("SYS", $"Found {lines.Length} lines in {path}");
                 int enqueued = 0;
                 foreach (string line in lines)
                 {
@@ -351,9 +384,7 @@ namespace Meridian59.TuiClient
 
             if (File.Exists(path))
             {
-                Log("SYS", $"Loading autoexec.script from {path}...");
                 string[] lines = File.ReadAllLines(path);
-                Log("SYS", $"Found {lines.Length} lines in autoexec.script");
                 foreach (string line in lines)
                 {
                     string cmd = line.Trim();
@@ -363,22 +394,22 @@ namespace Meridian59.TuiClient
                 }
                 Log("SYS", $"Enqueued {scriptQueue.Count} commands from autoexec.script");
             }
-            else
-            {
-                Log("SYS", "autoexec.script not found in current dir, bin/, or base directory.");
-            }
         }
 
         public override void SendUserCommandRest()
         {
             Log("SYS", "Sending REST command...");
-            base.SendUserCommandRest();
+            var command = new UserCommandRest();
+            ServerConnection.SendQueue.Enqueue(new UserCommandMessage(command, null));
+            Data.IsResting = true;
         }
 
         public override void SendUserCommandStand()
         {
             Log("SYS", "Sending STAND command...");
-            base.SendUserCommandStand();
+            var command = new UserCommandStand();
+            ServerConnection.SendQueue.Enqueue(new UserCommandMessage(command, null));
+            Data.IsResting = false;
         }
 
         private void ProcessScriptQueue()
@@ -413,78 +444,94 @@ namespace Meridian59.TuiClient
         {
             if (Data.UIMode == UIMode.Playing)
             {
-                Log("DEBUG", "Received character list while already playing. Likely protocol desync. Skipping.");
+                // Log("DEBUG", "Received character list while already playing. Likely protocol desync. Skipping.");
                 return;
             }
 
-            Log("SYS", $"Received character list ({Message.WelcomeInfo.Characters.Count} characters).");
-            foreach (var character in Message.WelcomeInfo.Characters)
+            // Custom selection logic
+            string targetChar = Config.SelectedConnectionInfo?.Character;
+            if (!string.IsNullOrEmpty(targetChar))
             {
-                Log("SYS", $"Account Character: {character.Name} (ID: {character.ID})");
+                var found = Message.WelcomeInfo.Characters.FirstOrDefault(c => c.Name.Equals(targetChar, StringComparison.OrdinalIgnoreCase));
+                if (found != null)
+                {
+                    Data.ExpectedAvatarName = found.Name;
+                    SendUseCharacterMessage(new ObjectID(found.ID), true, found.Name);
+                    return;
+                }
             }
-            base.HandleCharactersMessage(Message);
+            
+                if (!string.IsNullOrEmpty(ScriptFile) && Message.WelcomeInfo.Characters.Count > 0)
+                {
+                    var fallback = Message.WelcomeInfo.Characters[0];
+                    Data.ExpectedAvatarName = fallback.Name;
+                    SendUseCharacterMessage(new ObjectID(fallback.ID), true, fallback.Name);
+                    return;
+                }
         }
 
         private uint lastLoggedRoomId = 0;
-        protected override void HandlePlayerMessage(Meridian59.Protocol.GameMessages.PlayerMessage Message)
+        protected override void HandlePlayerMessage(PlayerMessage Message)
         {
-            // base.HandlePlayerMessage(Message) in BotClient logs "Entered room" unconditionally.
-            // We implement the logic ourselves here to only log on change.
-            Data.HandleGameModeMessage(Message); 
+            renderer.Invalidate();
+
+            // Data layer was already updated by BaseClient.HandleGameModeMessage before routing here.
+            // Calling Data.HandleGameModeMessage again would double-invoke HandlePlayer (clears room objects twice).
 
             if (Message.RoomInfo.RoomID != lastLoggedRoomId)
             {
-                Log("SYS", "Entered room: " + Message.RoomInfo.RoomName);
+                Log("SYS", $"Entered room: {Message.RoomInfo.RoomName} (ID: {Message.RoomInfo.RoomID}, File: {Message.RoomInfo.RoomFile})");
                 lastLoggedRoomId = Message.RoomInfo.RoomID;
             }
+
+            // Resolve ROO resources on main thread if needed (base class logic)
+            RooFile rooFile = Message.RoomInfo.ResourceRoom;
+            if (rooFile != null && rooFile.IsResourcesResolved)
+            {
+                rooFile.Reset();
+                rooFile.ResolveResources(ResourceManager);
+                rooFile.UncompressAll();
+            }
+
+            // Reset position tracking so the next move is sent unconditionally.
+            // Do NOT send ReqMove(0,0) here: the 900 server auto-delivers room contents on login
+            // and treating (0,0) as a real position rubber-bands the character to the room boundary.
+            lastSentPositionX = ushort.MaxValue;
+            lastSentPositionY = ushort.MaxValue;
+            lastSentSector = null;
+
+            Util.ForceMaximumGC();
+        }
+
+        protected override void HandleCharInfoOKMessage(Meridian59.Protocol.GameMessages.CharInfoOkMessage Message)
+        {
+            Log("SYS", "Character creation successful! Logging in...");
+            base.HandleCharInfoOKMessage(Message);
         }
 
         protected override void HandleGameModeMessage(GameModeMessage Message)
         {
             var pi = (MessageTypeGameMode)Message.PI;
 
-            if (Config.IsDebugEnabled)
+            // Only log important stuff to UI to prevent spam
+            if (pi == MessageTypeGameMode.Message && Message is MessageMessage pMsg)
             {
-                Log("DEBUG", $"NET RECV: PI={Message.PI} ({pi}) Length={Message.ByteLength}");
-            }
-
-            if (pi == MessageTypeGameMode.Message)
-            {
-                var pMsg = (MessageMessage)Message;
                 if (pMsg.Message != null)
                 {
                     Log("SYS", pMsg.Message.FullString);
                 }
             }
-            else if (pi == MessageTypeGameMode.Move)
+            else if (pi == MessageTypeGameMode.Move && Message is MoveMessage m)
             {
-                var m = (MoveMessage)Message;
-                var avatarID = Data.AvatarObject?.ID ?? 0;
-                Log("NET", $"Move: obj={m.ObjectID}{(m.ObjectID == avatarID ? " (AVATAR)" : "")} x={m.NewCoordinateX} y={m.NewCoordinateY} spd={m.MovementSpeed}");
+                // Suppress movement log to avoid console pollution
             }
-            else if (pi == MessageTypeGameMode.PlayWave)
+            else if (pi == MessageTypeGameMode.Characters && Message is CharactersMessage chars)
             {
-                var w = (PlayWaveMessage)Message;
-                Log("NET", $"PlayWave: {w.PlayInfo?.ResourceName ?? "?"}");
+                // auto-selection handled in HandleCharactersMessage override
             }
-            else if (pi == MessageTypeGameMode.Effect)
+            else if (pi == MessageTypeGameMode.LightAmbient || pi == MessageTypeGameMode.LightPlayer || pi == MessageTypeGameMode.StatGroup || pi == MessageTypeGameMode.LightShading)
             {
-                var e = (EffectMessage)Message;
-                Log("NET", $"Effect: {e.Effect}");
-            }
-            else if (pi == MessageTypeGameMode.Create)
-            {
-                var c = (CreateMessage)Message;
-                Log("NET", $"Create: obj={c.NewRoomObject?.ID} name={c.NewRoomObject?.Name} x={c.NewRoomObject?.CoordinateX} y={c.NewRoomObject?.CoordinateY}");
-            }
-            else if (pi == MessageTypeGameMode.Spells)
-            {
-                var s = (SpellsMessage)Message;
-                Log("NET", $"Spells: Count={s.SpellObjects.Length}");
-                foreach (var spell in s.SpellObjects)
-                {
-                    Log("NET", $"  Spell: ID={spell.ID} Name={spell.Name} Targets={spell.TargetsCount}");
-                }
+                // Silently ignore these for UI log
             }
 
             base.HandleGameModeMessage(Message);
@@ -546,7 +593,7 @@ namespace Meridian59.TuiClient
 
                 // Hint bar at h-1
                 Console.SetCursorPosition(0, h - 1);
-                string hints = " [Enter]Chat  [Arrows/WASD]Move  [+/-]Zoom  [PgUp/Dn]Scroll  [Q]uit";
+                string hints = " [Enter]Chat  [Arrows/WASD]Move  [R]un  [F5]Refresh  [+/-]Zoom  [Q]uit";
                 Console.Write(SafeLine("╚" + hints.PadRight(78, '═') + "╝", w - 1));
 
                 DrawStats();
@@ -577,27 +624,29 @@ namespace Meridian59.TuiClient
             if (!HasTty) return;
             lock (consoleLock)
             {
+                // Bars (starts col 2)
                 Console.SetCursorPosition(2, 1);
-                Console.Write("HP:  " + StatStr(Data.AvatarCondition, 1)); 
+                Console.Write("HP: " + StatStr(Data.AvatarCondition, 1).PadRight(7));
 
                 Console.SetCursorPosition(2, 2);
-                Console.Write("MP:  " + StatStr(Data.AvatarCondition, 2)); 
+                Console.Write("MP: " + StatStr(Data.AvatarCondition, 2).PadRight(7));
 
                 Console.SetCursorPosition(2, 3);
-                Console.Write("VIG: " + StatStr(Data.AvatarCondition, 3)); 
+                Console.Write("VG: " + StatStr(Data.AvatarCondition, 3).PadRight(7));
 
                 uint cash = 0;
                 var shilling = Data.InventoryObjects.GetItemByName("shilling", false);
                 if (shilling != null) cash = (uint)shilling.Count;
 
-                Console.SetCursorPosition(50, 3);
-                Console.Write($"$: {cash,-8}");
-
+                // Sub-stats (starts col 17, 26, 32)
                 Console.SetCursorPosition(17, 3);
-                Console.Write($"RTT: {ServerConnection.RTT,-4}ms");
+                Console.Write($"RTT:{ServerConnection.RTT,-3}");
 
-                Console.SetCursorPosition(33, 3);
-                Console.Write($"REST: {Data.IsResting,-5}");
+                Console.SetCursorPosition(26, 3);
+                Console.Write($"RST:{(Data.IsResting ? "Y" : "N"),-1}");
+
+                Console.SetCursorPosition(32, 3);
+                Console.Write($"$:{cash,-5}");
             }
         }
 
@@ -609,54 +658,32 @@ namespace Meridian59.TuiClient
 
             lock (consoleLock)
             {
+                // Room Name (starts col 17, max 18 chars)
                 Console.SetCursorPosition(17, 1);
                 Console.ForegroundColor = ConsoleColor.White;
                 string roomName = ri?.RoomName ?? "Unknown Room";
-                if (roomName.Length > 30) roomName = roomName[..27] + "...";
-                Console.Write($"ROOM: {roomName,-30}");
+                if (roomName.Length > 18) roomName = roomName[..15] + "...";
+                Console.Write($"{roomName,-18}");
                 Console.ResetColor();
 
                 if (avatar != null)
                 {
-                    Console.SetCursorPosition(60, 1);
-                    Console.Write($"X:{avatar.CoordinateX,5} Y:{avatar.CoordinateY,5}");
+                    // Coordinates (starts col 37, max 15 chars)
+                    Console.SetCursorPosition(37, 1);
+                    Console.Write($"X:{avatar.CoordinateX,4} Y:{avatar.CoordinateY,4}");
 
-                    if (ri != null && ri.ResourceRoom != null)
-                    {
-                        var roo = ri.ResourceRoom;
-                        var box = roo.GetBoundingBox2D(true);
-                        
-                        // Get 4 world corners of room in ROO units
-                        float[,] worldCorners = new float[4,2] {
-                            { (float)box.Min.X, (float)box.Min.Y },
-                            { (float)box.Max.X, (float)box.Min.Y },
-                            { (float)box.Min.X, (float)box.Max.Y },
-                            { (float)box.Max.X, (float)box.Max.Y }
-                        };
-                        
-                        // Find the "Anchor" (Top-Left) of the room in the current rotated VIEW space
-                        float minRX = float.MaxValue, minRY = float.MaxValue;
-                        for(int i=0; i<4; i++) {
-                            renderer.WorldToRotatedOnly(worldCorners[i,0], worldCorners[i,1], out float rx, out float ry);
-                            if (rx < minRX) minRX = rx;
-                            if (ry < minRY) minRY = ry;
-                        }
-                        
-                        // Player position in the same rotated VIEW space
-                        renderer.WorldToRotatedOnly(avatar.CoordinateX * 16f - 1024f, avatar.CoordinateY * 16f - 1024f, out float pRX, out float pRY);
-                        
-                        // Offset from the rotated anchor in 1024-unit grid squares
-                        float offX = pRX - minRX;
-                        float offY = pRY - minRY;
-                        
-                        int col = (int)(offX / 1024) + 1;
-                        int row = (int)(offY / 1024) + 1;
-                        int fineCol = (int)((offX % 1024) / 16);
-                        int fineRow = (int)((offY % 1024) / 16);
-
-                        Console.SetCursorPosition(17, 2);
-                        Console.Write($"R:{row,3} C:{col,3} FR:{fineRow,2} FC:{fineCol,2}");
-                    }
+                    // Tile (starts col 55). Standard M59: Tile = position3D - 64.0
+                    // PadRight(24) fills exactly to col 78, clearing any residual content.
+                    float tileCol = ((float)avatar.Position3D.X - 64.0f);
+                    float tileRow = ((float)avatar.Position3D.Z - 64.0f);
+                    Console.SetCursorPosition(55, 1);
+                    Console.Write($"Tile:{tileCol,4:F1},{tileRow,4:F1}".PadRight(24));
+                }
+                else
+                {
+                    // Clear coords + tile area when no avatar
+                    Console.SetCursorPosition(37, 1);
+                    Console.Write(new string(' ', 42));
                 }
             }
         }
@@ -670,36 +697,51 @@ namespace Meridian59.TuiClient
             int logWidth = 78;
             int logHeight = LogBottom - LOG_FIRST_ROW;
 
+            var buffer = activeTab == LogTab.Network ? netBuffer : logBuffer;
+            var offset = activeTab == LogTab.Network ? netScrollOffset : scrollOffset;
+
             lock (consoleLock)
             {
+                // Draw tab header
+                Console.SetCursorPosition(1, LOG_FIRST_ROW - 1);
+                Console.ForegroundColor = activeTab == LogTab.Chat ? ConsoleColor.White : ConsoleColor.DarkGray;
+                Console.Write(" [CHAT] ");
+                Console.ForegroundColor = activeTab == LogTab.Network ? ConsoleColor.White : ConsoleColor.DarkGray;
+                Console.Write(" [NET] ");
+                Console.ResetColor();
+
                 lock (logLock)
                 {
                     for (int i = 0; i < logHeight; i++)
                     {
-                        int bufferIdx = logBuffer.Count - 1 - scrollOffset - (logHeight - 1 - i);
+                        int bufferIdx = buffer.Count - 1 - offset - (logHeight - 1 - i);
                         Console.SetCursorPosition(1, LOG_FIRST_ROW + i);
 
-                        if (bufferIdx >= 0 && bufferIdx < logBuffer.Count)
+                        if (bufferIdx >= 0 && bufferIdx < buffer.Count)
                         {
-                            var entry = logBuffer[bufferIdx];
-                            string prefix = entry.Timestamp.ToString("h:mm tt ");
+                            var entry = buffer[bufferIdx];
+                            // hh:mm tt (8 chars) + space = 9 chars
+                            string timeStr = entry.Timestamp.ToString("hh:mm:ss");
                             Console.ForegroundColor = ConsoleColor.Gray;
-                            Console.Write(prefix);
+                            Console.Write($"{timeStr,-9}");
 
                             switch (entry.Type)
                             {
                                 case "CHAT":  Console.ForegroundColor = ConsoleColor.Green; break;
                                 case "SYS":   Console.ForegroundColor = ConsoleColor.Cyan; break;
                                 case "NET":   Console.ForegroundColor = ConsoleColor.DarkGray; break;
+                                case "RECV":  Console.ForegroundColor = ConsoleColor.Yellow; break;
                                 case "ERROR": Console.ForegroundColor = ConsoleColor.Red; break;
                                 case "DEBUG": Console.ForegroundColor = ConsoleColor.DarkMagenta; break;
                                 default:      Console.ForegroundColor = ConsoleColor.White; break;
                             }
-                            Console.Write($"{entry.Type,-8}");
+                            // Type (8 chars) + space = 9 chars
+                            Console.Write($"{entry.Type,-9}");
                             Console.ResetColor();
 
+                            // Content (max 60 chars)
                             string content = entry.Text;
-                            int avail = logWidth - 16; 
+                            const int avail = 60; 
                             Console.Write(SafeLine(content.PadRight(avail), avail));
                         }
                         else
@@ -717,9 +759,12 @@ namespace Meridian59.TuiClient
 
             if (Type == "DEBUG" && HasTty) return;
 
-            int avail = LEFT_PANEL_WIDTH - 16;
+            // Total line = 9 (time) + 9 (type) + 60 (content) = 78. Fits perfectly in left panel.
+            const int avail = 60;
             string sanitized = Text.Replace('\n', ' ').Replace('\r', ' ').Replace('\t', ' ');
-            
+
+            var buffer = (Type == "RECV" || Type == "SEND") ? netBuffer : logBuffer;
+
             lock (logLock)
             {
                 while (sanitized.Length > 0)
@@ -744,17 +789,23 @@ namespace Meridian59.TuiClient
                             sanitized = sanitized[avail..];
                         }
                     }
-                    logBuffer.Add(new LogEntry(Type, chunk));
+                    if (!string.IsNullOrWhiteSpace(chunk))
+                        buffer.Add(new LogEntry(Type, chunk.TrimEnd()));
                 }
 
-                if (logBuffer.Count > LOG_CAPACITY)
-                    logBuffer.RemoveAt(0);
+                if (buffer.Count > LOG_CAPACITY)
+                    buffer.RemoveAt(0);
             }
 
-            if (scrollOffset == 0 && HasTty)
-                DrawLog();
+            if (HasTty)
+            {
+                bool shouldRedraw = false;
+                if (activeTab == LogTab.Chat && buffer == logBuffer && scrollOffset == 0) shouldRedraw = true;
+                if (activeTab == LogTab.Network && buffer == netBuffer && netScrollOffset == 0) shouldRedraw = true;
+                
+                if (shouldRedraw) DrawLog();
+            }
         }
-
         // ── Map ──────────────────────────────────────────────────────────────────
 
         public void DrawMap()
@@ -771,6 +822,18 @@ namespace Meridian59.TuiClient
 
             lock (consoleLock)
             {
+                // Ensure the panel separator at col 79, row 1 is intact before we write MapStatus next to it
+                Console.SetCursorPosition(79, 1);
+                Console.Write("║ ║");
+
+                // Draw Map Header in the gap above startY
+                Console.SetCursorPosition(startX, 1);
+                string mapHeader = renderer.MapStatus;
+                if (mapHeader.Length > width - 1) mapHeader = mapHeader[..(width - 1)];
+                Console.ForegroundColor = ConsoleColor.Cyan;
+                Console.Write(mapHeader.PadRight(width - 1));
+                Console.ResetColor();
+
                 if (activePopup != PopupMode.None)
                 {
                     DrawPopup(startX, startY, width, height);
@@ -1288,10 +1351,10 @@ namespace Meridian59.TuiClient
                     IsRunning = false;
                     break;
 
-                case TuiAction.MoveUp:    renderer.RotateMovement( 0, -1, out int urdx, out int urdy); HandleMovement(urdx, urdy); break;
-                case TuiAction.MoveDown:  renderer.RotateMovement( 0,  1, out int drdx, out int drdy); HandleMovement(drdx, drdy); break;
-                case TuiAction.MoveLeft:  renderer.RotateMovement(-1,  0, out int lrdx, out int lrdy); HandleMovement(lrdx, lrdy); break;
-                case TuiAction.MoveRight: renderer.RotateMovement( 1,  0, out int rrdx, out int rrdy); HandleMovement(rrdx, rrdy); break;
+                case TuiAction.MoveUp:    HandleMovement( 0, -1); break;
+                case TuiAction.MoveDown:  HandleMovement( 0,  1); break;
+                case TuiAction.MoveLeft:  HandleMovement(-1,  0); break;
+                case TuiAction.MoveRight: HandleMovement( 1,  0); break;
 
                 case TuiAction.ScrollUp:
                     scrollOffset = Math.Min(scrollOffset + 5, logBuffer.Count - 5);
@@ -1308,12 +1371,6 @@ namespace Meridian59.TuiClient
                     break;
                 case TuiAction.ZoomOut:
                     renderer.ZoomOut();
-                    DrawMap();
-                    break;
-
-                case TuiAction.ToggleRotation:
-                    renderer.CycleOrientation();
-                    Log("SYS", $"Orientation: {renderer.Orientation}");
                     DrawMap();
                     break;
 
@@ -1343,6 +1400,20 @@ namespace Meridian59.TuiClient
                     Log("SYS", "Noclip: " + (isNoClip ? "ON" : "OFF"));
                     break;
 
+                case TuiAction.ToggleRun:
+                    isRunning = !isRunning;
+                    Log("SYS", "Run mode: " + (isRunning ? "ON" : "OFF"));
+                    break;
+
+                case TuiAction.Refresh:
+                    lock (consoleLock)
+                    {
+                        renderer.Invalidate();
+                        Console.Clear();
+                        DrawTuiLayout();
+                    }
+                    break;
+
                 case TuiAction.Hotkey1:
                 case TuiAction.Hotkey2:
                 case TuiAction.Hotkey3:
@@ -1350,12 +1421,45 @@ namespace Meridian59.TuiClient
                     // Implement specific hotkey logic if needed, for now just log it
                     Log("SYS", $"Hotkey pressed: {action}");
                     break;
+
+                case TuiAction.ToggleNetTab:
+                    activeTab = (activeTab == LogTab.Chat) ? LogTab.Network : LogTab.Chat;
+                    DrawLog();
+                    break;
+            }
+        }
+
+        private bool TryParseDirection(string text, out int dx, out int dz)
+        {
+            string t = text.Trim();
+            // Strip optional verb prefix
+            if (t.StartsWith("go ",   StringComparison.OrdinalIgnoreCase)) t = t[3..].Trim();
+            else if (t.StartsWith("move ", StringComparison.OrdinalIgnoreCase)) t = t[5..].Trim();
+
+            switch (t.ToLowerInvariant())
+            {
+                case "north":     case "n":  dx =  0; dz = -1; return true;
+                case "south":     case "s":  dx =  0; dz =  1; return true;
+                case "east":      case "e":  dx =  1; dz =  0; return true;
+                case "west":      case "w":  dx = -1; dz =  0; return true;
+                case "northeast": case "ne": dx =  1; dz = -1; return true;
+                case "southeast": case "se": dx =  1; dz =  1; return true;
+                case "southwest": case "sw": dx = -1; dz =  1; return true;
+                case "northwest": case "nw": dx = -1; dz = -1; return true;
+                default: dx = 0; dz = 0; return false;
             }
         }
 
         private void ProcessCommand(string text)
         {
             if (string.IsNullOrEmpty(text)) return;
+
+            if (charCreationState != CharCreationState.None)
+            {
+                HandleCharCreationInput(text);
+                return;
+            }
+
             Log("CMD", text);
 
             if (text.Equals("/quit", StringComparison.OrdinalIgnoreCase) ||
@@ -1364,6 +1468,62 @@ namespace Meridian59.TuiClient
                 Log("SYS", "Disconnecting...");
                 ServerConnection.Disconnect("User quit command");
                 IsRunning = false;
+                return;
+            }
+
+            if (text.Equals("w",  StringComparison.OrdinalIgnoreCase)) { HandleMovement( 0, -1); return; }
+            if (text.Equals("s",  StringComparison.OrdinalIgnoreCase)) { HandleMovement( 0,  1); return; }
+            if (text.Equals("a",  StringComparison.OrdinalIgnoreCase)) { HandleMovement(-1,  0); return; }
+            if (text.Equals("d",  StringComparison.OrdinalIgnoreCase)) { HandleMovement( 1,  0); return; }
+            if (text.Equals("g",  StringComparison.OrdinalIgnoreCase)) { PerformAction(TuiAction.ManualGo); return; }
+            if (text.Equals("u",  StringComparison.OrdinalIgnoreCase)) { PerformAction(TuiAction.Use); return; }
+
+            // Cardinal direction movement (for scripts: "north", "go north", "move north", etc.)
+            if (TryParseDirection(text, out int cdx, out int cdz)) { HandleMovement(cdx, cdz); return; }
+
+            if (text.StartsWith("/createchar", StringComparison.OrdinalIgnoreCase))
+            {
+                string[] parts = text.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length < 2 || !int.TryParse(parts[1], out int slotIdx) || slotIdx < 0 || slotIdx > 3)
+                {
+                    Log("ERROR", "Usage: /createchar <slot_index (0-3)>");
+                    return;
+                }
+
+                if (Data.WelcomeInfo == null || Data.WelcomeInfo.Characters == null || slotIdx >= Data.WelcomeInfo.Characters.Count)
+                {
+                    Log("ERROR", "Character list not loaded or invalid slot index.");
+                    return;
+                }
+
+                var character = Data.WelcomeInfo.Characters[slotIdx];
+                Log("SYS", $"Initiating character creation on slot {slotIdx} (ID: {character.ID})...");
+                charCreationState = CharCreationState.AwaitingCharInfo;
+                inputMode = true; // Ensure we capture the next inputs
+                inputBuffer = "";
+                SendSystemMessageSendCharInfo(character.ID);
+                return;
+            }
+
+            if (text.StartsWith("/use", StringComparison.OrdinalIgnoreCase))
+            {
+                string[] parts = text.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length < 2 || !int.TryParse(parts[1], out int slotIdx) || slotIdx < 0 || slotIdx > 3)
+                {
+                    Log("ERROR", "Usage: /use <slot_index (0-3)>");
+                    return;
+                }
+
+                if (Data.WelcomeInfo == null || Data.WelcomeInfo.Characters == null || slotIdx >= Data.WelcomeInfo.Characters.Count)
+                {
+                    Log("ERROR", "Character list not loaded or invalid slot index.");
+                    return;
+                }
+
+                var character = Data.WelcomeInfo.Characters[slotIdx];
+                Log("SYS", $"Selecting character in slot {slotIdx} (ID: {character.ID})...");
+                Data.ExpectedAvatarName = character.Name;
+                SendUseCharacterMessage(new ObjectID(character.ID), true, character.Name);
                 return;
             }
 
@@ -1388,16 +1548,18 @@ namespace Meridian59.TuiClient
                 return;
             }
 
+            if (text.Equals("use",      StringComparison.OrdinalIgnoreCase) ||
+                text.Equals("opendoor", StringComparison.OrdinalIgnoreCase))
+            {
+                SendReqActivate();
+                return;
+            }
+
             if (text.Equals("go", StringComparison.OrdinalIgnoreCase))
             {
                 SendReqGo(true);
                 return;
             }
-
-            if (text.Equals("w", StringComparison.OrdinalIgnoreCase)) { renderer.RotateMovement( 0, -1, out int rdx, out int rdy); HandleMovement(rdx, rdy); return; }
-            if (text.Equals("s", StringComparison.OrdinalIgnoreCase)) { renderer.RotateMovement( 0,  1, out int rdx, out int rdy); HandleMovement(rdx, rdy); return; }
-            if (text.Equals("a", StringComparison.OrdinalIgnoreCase)) { renderer.RotateMovement(-1,  0, out int rdx, out int rdy); HandleMovement(rdx, rdy); return; }
-            if (text.Equals("d", StringComparison.OrdinalIgnoreCase)) { renderer.RotateMovement( 1,  0, out int rdx, out int rdy); HandleMovement(rdx, rdy); return; }
 
             if (text.Equals("noclip", StringComparison.OrdinalIgnoreCase))
             {
@@ -1406,16 +1568,83 @@ namespace Meridian59.TuiClient
                 return;
             }
 
+            if (text.StartsWith("move ", StringComparison.OrdinalIgnoreCase) || text.StartsWith("tile ", StringComparison.OrdinalIgnoreCase))
+            {
+                string[] parts = text.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length == 3 && float.TryParse(parts[1], out float tx) && float.TryParse(parts[2], out float ty))
+                {
+                    var av = Data.AvatarObject;
+                    if (av != null)
+                    {
+                        // Set Kod units: Tile * 64 + 64
+                        var newPos = av.Position3D;
+                        newPos.X = (tx * 64.0f) + 64.0f;
+                        newPos.Z = (ty * 64.0f) + 64.0f;
+                        av.Position3D = newPos;
+                        SendReqMoveMessage(true);
+                        Log("SYS", $"Moved to tile {tx}, {ty} (Kod:{newPos.X},{newPos.Z})");
+                    }
+                }
+                return;
+            }
+
+            if (text.StartsWith("raw ", StringComparison.OrdinalIgnoreCase))
+            {
+                string[] parts = text[4..].Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length == 2 && float.TryParse(parts[0], out float rx) && float.TryParse(parts[1], out float ry))
+                {
+                    var av = Data.AvatarObject;
+                    if (av != null)
+                    {
+                        // Set Kod units via property (converts to ROO)
+                        av.CoordinateX = (ushort)rx;
+                        av.CoordinateY = (ushort)ry;
+                        SendReqMoveMessage(true);
+                        Log("SYS", $"Moved to Kod {rx}, {ry} (ROO:{av.Position3D.X},{av.Position3D.Z})");
+                    }
+                }
+                return;
+            }
+
+            if (text.Equals("/dumpobjects", StringComparison.OrdinalIgnoreCase))
+            {
+                var objs = Data.RoomObjects;
+                Log("SYS", $"Objects in room ({objs.Count}):");
+                foreach (var obj in objs)
+                {
+                    Log("SYS", $"  ID:{obj.ID} Name:{obj.Name} Kod:{obj.CoordinateX},{obj.CoordinateY} P:{obj.Flags.IsPlayer} M:{obj.Flags.IsCreature} A:{obj.Flags.IsAttackable}");
+                }
+                return;
+            }
+
+            if (text.Equals("pos", StringComparison.OrdinalIgnoreCase) || text.Equals("log pos", StringComparison.OrdinalIgnoreCase))
+            {
+                var av = Data.AvatarObject;
+                if (av != null)
+                {
+                    float tx = ((float)av.Position3D.X - 64.0f) / 64.0f;
+                    float ty = ((float)av.Position3D.Z - 64.0f) / 64.0f;
+                    Log("SYS", $"Pos: Kod({av.CoordinateX},{av.CoordinateY}) Tile:{tx:F2},{ty:F2}");
+                }
+                return;
+            }
+
             if (text.Equals("rest", StringComparison.OrdinalIgnoreCase) || text.Equals("/rest", StringComparison.OrdinalIgnoreCase))
             {
                 if (isRecording) recorder.Record("Rest", Data.AvatarObject);
-                SendUserCommandRest();
+                Log("SYS", "Resting...");
+                var command = new UserCommandRest();
+                ServerConnection.SendQueue.Enqueue(new UserCommandMessage(command, null));
+                Data.IsResting = true;
                 return;
             }
             if (text.Equals("stand", StringComparison.OrdinalIgnoreCase) || text.Equals("/stand", StringComparison.OrdinalIgnoreCase))
             {
                 if (isRecording) recorder.Record("Stand", Data.AvatarObject);
-                SendUserCommandStand();
+                Log("SYS", "Standing up...");
+                var command = new UserCommandStand();
+                ServerConnection.SendQueue.Enqueue(new UserCommandMessage(command, null));
+                Data.IsResting = false;
                 return;
             }
 
@@ -1430,6 +1659,42 @@ namespace Meridian59.TuiClient
                     Log("SYS", $"Walls: {roo.Walls.Count} Sectors: {roo.Sectors.Count}");
                 }
                 else Log("ERROR", "No room data available.");
+                return;
+            }
+
+            if (text.Equals("dump walls", StringComparison.OrdinalIgnoreCase))
+            {
+                if (CurrentRoom != null)
+                {
+                    var avatar = Data.AvatarObject;
+                    var pos2D = new V2(avatar.CoordinateX * 16f - 1024f, avatar.CoordinateY * 16f - 1024f);
+                    Log("SYS", $"Current Pos: ({pos2D.X:F1},{pos2D.Y:F1})");
+                    foreach (var wall in CurrentRoom.Walls)
+                    {
+                        bool isPassable = (wall.LeftSide != null && wall.LeftSide.Flags.IsPassable) ||
+                                          (wall.RightSide != null && wall.RightSide.Flags.IsPassable);
+                        bool isExit = (wall.LeftSectorNum == 0 || wall.RightSectorNum == 0);
+                        if (isPassable || isExit)
+                        {
+                            int uc;
+                            var p1 = wall.P1; var p2 = wall.P2;
+                            double d2 = (double)pos2D.MinSquaredDistanceToLineSegment(ref p1, ref p2, out uc);
+                            Log("SYS", $"Wall {wall.Num}: ({p1.X},{p1.Y})->({p2.X},{p2.Y}) Dist: {Math.Sqrt(d2):F1} Exit: {isExit}");
+                        }
+                    }
+                }
+                return;
+            }
+
+            if (text.Equals("status", StringComparison.OrdinalIgnoreCase))
+            {
+                var ri = Data.RoomInformation;
+                var av = Data.AvatarObject;
+                if (av != null)
+                {
+                    Log("SYS", $"STATUS: Room={ri?.RoomName} HP={StatStr(Data.AvatarCondition, 1)} MP={StatStr(Data.AvatarCondition, 2)} VIG={StatStr(Data.AvatarCondition, 3)}");
+                }
+                else Log("SYS", $"STATUS: Room={ri?.RoomName} (Avatar null)");
                 return;
             }
 
@@ -1503,149 +1768,248 @@ namespace Meridian59.TuiClient
             SendSayToMessage(ChatTransmissionType.Normal, text);
         }
 
-        private bool DoFineStep(V2 direction, float worldDist)
+        private void ResetCharCreation()
         {
-            var avatar = Data.AvatarObject;
-            if (avatar == null) { Log("DBG", "DoFineStep: avatar null"); return false; }
-            if (CurrentRoom == null) { Log("DBG", $"DoFineStep: CurrentRoom null (roomFile={Data.RoomInformation.RoomFile})"); return false; }
-            var start2D = avatar.Position2D;
-            var targetEnd = start2D + (direction * (Real)worldDist);
-            var rooStart = avatar.Position3D.Clone();
-            rooStart.ConvertToROO();
-            var rooEnd2D = new V2(targetEnd.X * 16.0f - 1024.0f, targetEnd.Y * 16.0f - 1024.0f);
-            var allowedROO = CurrentRoom.VerifyMove(ref rooStart, ref rooEnd2D, 50);
-            if (allowedROO.LengthSquared < 0.000001f) return false;
-            allowedROO.Scale(0.0625f);
-            var finalPos = start2D + allowedROO;
-            avatar.Position3D = new V3(finalPos.X, avatar.Position3D.Y, finalPos.Y);
-            avatar.UpdatePosition(10, Data.RoomInformation);
-            return true;
+            charCreationState = CharCreationState.None;
+            inputMode = false;
+            inputBuffer = "";
+            DrawInputField();
+        }
+
+        private void HandleCharCreationInput(string text)
+        {
+            var info = Data.CharCreationInfo;
+            switch (charCreationState)
+            {
+                case CharCreationState.Name:
+                    info.AvatarName = text;
+                    Log("SYS", $"Name set to: {info.AvatarName}");
+                    charCreationState = CharCreationState.Gender;
+                    Log("SYS", "Enter gender (M/F):");
+                    break;
+
+                case CharCreationState.Gender:
+                    if (text.Equals("M", StringComparison.OrdinalIgnoreCase)) { info.SetExampleModel(Gender.Male); }
+                    else if (text.Equals("F", StringComparison.OrdinalIgnoreCase)) { info.SetExampleModel(Gender.Female); }
+                    else { Log("ERROR", "Invalid gender. Enter M or F:"); return; }
+                    Log("SYS", $"Gender set to: {info.Gender}");
+                    charCreationState = CharCreationState.Stats;
+                    Log("SYS", "Enter stats: Might Intellect Stamina Agility Mysticism Aim");
+                    Log("SYS", "(6 numbers, e.g. '30 30 40 30 40 30', sum must be 200)");
+                    break;
+
+                case CharCreationState.Stats:
+                    string[] parts = text.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                    if (parts.Length != 6) { Log("ERROR", "Need exactly 6 numbers:"); return; }
+                    uint[] s = new uint[6];
+                    uint sum = 0;
+                    for (int i = 0; i < 6; i++)
+                    {
+                        if (!uint.TryParse(parts[i], out s[i])) { Log("ERROR", $"Invalid number: {parts[i]}"); return; }
+                        sum += s[i];
+                    }
+                    if (sum != 200) { Log("ERROR", $"Sum is {sum}, must be 200:"); return; }
+                    info.Might = s[0]; info.Intellect = s[1]; info.Stamina = s[2];
+                    info.Agility = s[3]; info.Mysticism = s[4]; info.Aim = s[5];
+                    Log("SYS", $"Stats set: M={s[0]} I={s[1]} S={s[2]} A={s[3]} My={s[4]} Ai={s[5]}");
+                    charCreationState = CharCreationState.Spells;
+                    Log("SYS", "Select spells/skills. Type 'list' for available, 'add <name>' to select, 'done' when finished.");
+                    break;
+
+                case CharCreationState.Spells:
+                    if (text.Equals("list", StringComparison.OrdinalIgnoreCase))
+                    {
+                        Log("SYS", "Available Spells:");
+                        foreach (var spell in info.Spells) Log("SYS", $"  [Spell] {spell.SpellName}");
+                        Log("SYS", "Available Skills:");
+                        foreach (var skill in info.Skills) Log("SYS", $"  [Skill] {skill.SkillName}");
+                    }
+                    else if (text.StartsWith("add ", StringComparison.OrdinalIgnoreCase))
+                    {
+                        string name = text[4..].Trim();
+                        var spell = info.Spells.FirstOrDefault(x => x.SpellName.Equals(name, StringComparison.OrdinalIgnoreCase));
+                        if (spell != null) { info.SelectedSpells.Add(spell); Log("SYS", $"Added spell: {spell.SpellName}"); }
+                        else
+                        {
+                            var skill = info.Skills.FirstOrDefault(x => x.SkillName.Equals(name, StringComparison.OrdinalIgnoreCase));
+                            if (skill != null) { info.SelectedSkills.Add(skill); Log("SYS", $"Added skill: {skill.SkillName}"); }
+                            else Log("ERROR", $"Unknown spell/skill: {name}");
+                        }
+                    }
+                    else if (text.Equals("done", StringComparison.OrdinalIgnoreCase))
+                    {
+                        charCreationState = CharCreationState.Review;
+                        Log("SYS", "--- Review Character ---");
+                        Log("SYS", $"Name: {info.AvatarName} Gender: {info.Gender}");
+                        Log("SYS", $"Stats: M={info.Might} I={info.Intellect} S={info.Stamina} A={info.Agility} My={info.Mysticism} Ai={info.Aim}");
+                        Log("SYS", "Type 'confirm' to create character, or 'cancel' to abort.");
+                    }
+                    break;
+
+                case CharCreationState.Review:
+                    if (text.Equals("confirm", StringComparison.OrdinalIgnoreCase))
+                    {
+                        Log("SYS", "Creating character...");
+                        // Randomize appearance from available pools
+                        Random r = new Random();
+                        int skinIdx = r.Next(info.SkinColors.Length);
+                        int hairColorIdx = r.Next(info.HairColors.Length);
+                        int hairIdx = (info.Gender == Gender.Male) ? r.Next(info.MaleHairIDs.Length) : r.Next(info.FemaleHairIDs.Length);
+                        int eyesIdx = (info.Gender == Gender.Male) ? r.Next(info.MaleEyeIDs.Length) : r.Next(info.FemaleEyeIDs.Length);
+                        int noseIdx = (info.Gender == Gender.Male) ? r.Next(info.MaleNoseIDs.Length) : r.Next(info.FemaleNoseIDs.Length);
+                        int mouthIdx = (info.Gender == Gender.Male) ? r.Next(info.MaleMouthIDs.Length) : r.Next(info.FemaleMouthIDs.Length);
+
+                        info.SetExampleModel(info.Gender, skinIdx, hairColorIdx, hairIdx, eyesIdx, noseIdx, mouthIdx);
+                        
+                        SendSystemMessageNewCharInfo();
+                        ResetCharCreation();
+                    }
+                    else if (text.Equals("cancel", StringComparison.OrdinalIgnoreCase))
+                    {
+                        Log("SYS", "Character creation aborted.");
+                        ResetCharCreation();
+                    }
+                    break;
+            }
+        }
+
+        public override void SendReqMoveMessage(bool ForceSend = false)
+        {
+            if (!ObjectID.IsValid(Data.AvatarID))
+            {
+                Logger.Log("TuiClient", LogType.Error, $"SendReqMoveMessage: AvatarID is INVALID: {Data.AvatarID:X8}");
+            }
+
+            // AVOID sending ReqMove(0,0) when we have a character selected but no avatar object yet.
+            // This prevents the server from snapping our spawn position to 0,0 during room entry.
+            if (ObjectID.IsValid(Data.AvatarID) && Data.AvatarObject == null) 
+            {
+                return;
+            }
+            base.SendReqMoveMessage(ForceSend);
         }
 
         private void HandleMovement(int dx, int dy)
         {
-            if (Data.AvatarObject == null) return;
-
-            // Determine angle for move request
-            ushort angle = Data.AvatarObject.AngleUnits;
-            if (Math.Abs(dx) > Math.Abs(dy))
-            {
-                if (dx > 0) angle = 0;          // East (+X)
-                else if (dx < 0) angle = 2048; // West (-X)
-            }
-            else
-            {
-                if (dy > 0) angle = 1024;       // South (+Y)
-                else if (dy < 0) angle = 3072; // North (-Y)
-            }
-
-            Move(dx, dy, angle);
-        }
-
-        private DateTime nextMoveAt = DateTime.MinValue;
-        private DateTime nextReqGoAt = DateTime.MinValue;
-
-        private void Move(int dx, int dy, ushort angle)
-        {
-            if (DateTime.Now < nextMoveAt) return;
-            nextMoveAt = DateTime.Now.AddMilliseconds(100);
             var avatar = Data.AvatarObject;
-            if (avatar == null) { Log("DBG", "Move: avatar null"); return; }
-            Log("DBG", $"Move({dx},{dy}) X:{avatar.CoordinateX} Y:{avatar.CoordinateY} room:{CurrentRoom != null}");
+            if (avatar == null) 
+            {
+                return;
+            }
+
+            // Rate-limit: original MOVE_DELAY = 100ms between steps
+            if ((DateTime.Now - lastMoveTime).TotalMilliseconds < MOVE_DELAY_MS) return;
+
+            // Facing angle: 0=E, 1024=S, 2048=W, 3072=N (NUMDEGREES=4096)
+            ushort angle;
+            if (dx > 0)      angle = (dy > 0) ? (ushort)512  : (dy < 0) ? (ushort)3584 : (ushort)0;
+            else if (dx < 0) angle = (dy > 0) ? (ushort)1536 : (dy < 0) ? (ushort)2560 : (ushort)2048;
+            else             angle = (dy > 0) ? (ushort)1024 : (ushort)3072;
+
             if (avatar.AngleUnits != angle)
             {
                 avatar.AngleUnits = angle;
                 SendReqTurnMessage(true);
             }
+
+            float stepSize = isRunning ? WORLD_STEP_RUN : WORLD_STEP_WALK;
+            byte  speedByte = isRunning ? SPEED_RUN : SPEED_WALK;
+
             if (isNoClip)
             {
-                avatar.CoordinateX = (ushort)Math.Clamp((int)avatar.CoordinateX + dx * 16, 0, 65535);
-                avatar.CoordinateY = (ushort)Math.Clamp((int)avatar.CoordinateY + dy * 16, 0, 65535);
-                byte origSpeed = (byte)avatar.HorizontalSpeed;
-                avatar.HorizontalSpeed = 16;
+                var p = avatar.Position3D;
+                p.X += dx * stepSize;
+                p.Z += dy * stepSize;
+                avatar.Position3D = p;
+                avatar.HorizontalSpeed = speedByte;
                 SendReqMoveMessage(true);
-                avatar.HorizontalSpeed = origSpeed;
+                lastMoveTime = DateTime.Now;
+                if (isRecording) recorder.Record("Move", avatar, $"X:{avatar.CoordinateX},Y:{avatar.CoordinateY},A:{angle}");
+                return;
             }
-            else
+
+            // Optimistic movement: move locally, let server rubber-band if wrong.
+            // Matches original clientd3d/move.c behavior.
             {
-                var direction = new V2(dx, dy);
-                if (direction.LengthSquared > 0.001f) direction.Normalize();
-                float remaining = 16.0f;
-                float stepSize = 4.0f;
-                bool movedAtAll = false;
-                while (remaining > 0.01f)
-                {
-                    float dist = Math.Min(remaining, stepSize);
-                    if (DoFineStep(direction, dist))
-                    {
-                        remaining -= dist;
-                        movedAtAll = true;
-                        // restore step size after a successful sub-step
-                        if (stepSize < 4.0f) stepSize = Math.Min(stepSize * 2.0f, 4.0f);
-                    }
-                    else
-                    {
-                        // Halve the step size progressively so we slide up to the wall
-                        // boundary smoothly without overshooting.
-                        stepSize *= 0.5f;
-                        if (stepSize < 0.0625f) break;
-                    }
-                }
-                if (movedAtAll)
-                {
-                    byte origSpeed = (byte)avatar.HorizontalSpeed;
-                    avatar.HorizontalSpeed = 16;
-                    SendReqMoveMessage(true);
-                    avatar.HorizontalSpeed = origSpeed;
-                }
-                // When fully blocked, do NOT send ReqGo — that is an explicit door
-                // action triggered by the G key only, not by walking into a wall.
+                var p = avatar.Position3D;
+                p.X += dx * stepSize;
+                p.Z += dy * stepSize;
+                avatar.Position3D = p;
+                avatar.HorizontalSpeed = speedByte;
+                SendReqMoveMessage(true);
             }
+
+            lastMoveTime = DateTime.Now;
             if (isRecording) recorder.Record("Move", avatar, $"X:{avatar.CoordinateX},Y:{avatar.CoordinateY},A:{angle}");
         }
-
-        public override void SendReqMoveMessage(bool ForceSend) => base.SendReqMoveMessage(ForceSend);
 
         public override void SendReqActivate()
         {
             var avatar = Data.AvatarObject;
             if (avatar == null) return;
+
+            // 0. Priority: If resting/sitting, Spacebar stands you up
+            if (Data.IsResting)
+            {
+                SendUserCommandStand();
+                return;
+            }
+
+            // 1. Priority: Check for nearby exit walls (Spacebar triggers 'go' in original client if near exit)
+            RooWall nearestWall = null;
+            double minDistWall2 = 128.0 * 128.0; 
+            var pos2D = new V2(avatar.CoordinateX * 16f - 1024f, avatar.CoordinateY * 16f - 1024f);
+            var roo = CurrentRoom;
+
+            if (roo != null)
+            {
+                foreach (var wall in roo.Walls)
+                {
+                    bool isPassable = (wall.LeftSide != null && wall.LeftSide.Flags.IsPassable) ||
+                                      (wall.RightSide != null && wall.RightSide.Flags.IsPassable);
+                    bool isExit = (wall.LeftSectorNum == 0 || wall.RightSectorNum == 0);
+
+                    if (isPassable || isExit)
+                    {
+                        int uc;
+                        var p1 = wall.P1; var p2 = wall.P2;
+                        double d2 = (double)pos2D.MinSquaredDistanceToLineSegment(ref p1, ref p2, out uc);
+                        if (d2 < minDistWall2)
+                        {
+                            minDistWall2 = d2;
+                            nearestWall = wall;
+                        }
+                    }
+                }
+            }
+
+            if (nearestWall != null)
+            {
+                Log("SYS", $"Near exit wall {nearestWall.Num}, triggering Go.");
+                SendReqGo(true);
+                return;
+            }
+
+            // 2. Secondary: Check for nearby activatable objects
             RoomObject nearestObj = null;
             double minDistObj = 128.0; 
             foreach (var obj in Data.RoomObjects)
             {
                 if (obj.ID == avatar.ID) continue;
-                double dist = Math.Sqrt(Math.Pow(obj.CoordinateX - avatar.CoordinateX, 2) + Math.Pow(obj.CoordinateY - avatar.CoordinateY, 2));
-                if (dist < minDistObj) { minDistObj = dist; nearestObj = obj; }
-            }
-            RooWall nearestWall = null;
-            double minDistWall = 64.0; 
-            if (CurrentRoom != null)
-            {
-                var pos2D = new V2(avatar.CoordinateX * 16f - 1024f, avatar.CoordinateY * 16f - 1024f);
-                foreach (var wall in CurrentRoom.Walls)
+                if (!obj.Flags.IsActivatable) continue;
+                double d = (double)avatar.GetDistance(obj);
+                if (d < minDistObj)
                 {
-                    int uc;
-                    var p1 = wall.P1;
-                    var p2 = wall.P2;
-                    double d2 = (double)pos2D.MinSquaredDistanceToLineSegment(ref p1, ref p2, out uc);
-                    if (d2 < minDistWall * minDistWall) { minDistWall = Math.Sqrt(d2); nearestWall = wall; }
+                    minDistObj = d;
+                    nearestObj = obj;
                 }
             }
-            if (nearestObj != null && minDistObj < minDistWall)
+
+            if (nearestObj != null && minDistObj < 128.0)
             {
                 Log("SYS", $"Activating: {nearestObj.Name} (ID: {nearestObj.ID})");
                 if (isRecording) recorder.Record("Activate", avatar, $"Object:{nearestObj.ID}");
                 base.SendReqActivate(nearestObj.ID);
-            }
-            else if (nearestWall != null)
-            {
-                var side = nearestWall.RightSide ?? nearestWall.LeftSide;
-                uint targetID = (side != null && side.ServerID != 0) 
-                    ? 0x80000000 | (uint)(ushort)side.ServerID 
-                    : 0x80000000 | (uint)(ushort)nearestWall.Num;
-                if (isRecording) recorder.Record("Activate", avatar, $"Wall:{targetID:X8}");
-                ServerConnection.SendQueue.Enqueue(new ReqUseMessage(targetID));
             }
             else
             {
@@ -1657,56 +2021,110 @@ namespace Meridian59.TuiClient
         public override void SendReqGo(bool SendPositionBefore = true)
         {
             var avatar = Data.AvatarObject;
-            if (avatar != null && CurrentRoom != null)
+            var roo = CurrentRoom;
+            if (avatar != null && roo != null)
             {
+                // ROO coordinates (0-based room space)
+                // Use the standardized conversion from V3.ConvertToROO()
+                // X = X * 16 - 1024, Z = Z * 16 - 1024
                 var pos2D = new V2(avatar.CoordinateX * 16f - 1024f, avatar.CoordinateY * 16f - 1024f);
+                
                 RooWall nearestWall = null;
-                double minDist2 = 256.0 * 256.0; 
+                double minDist2 = double.MaxValue;
                 V2 snapPoint = pos2D;
-                foreach (var wall in CurrentRoom.Walls)
-                {
-                    bool isPassable = (wall.LeftSide != null && wall.LeftSide.Flags.IsPassable) ||
-                                      (wall.RightSide != null && wall.RightSide.Flags.IsPassable);
-                    bool isExit = (wall.LeftSectorNum == 0 || wall.RightSectorNum == 0);
 
-                    if (isPassable || isExit)
+                foreach (var wall in roo.Walls)
+                {
+                    bool isExit = (wall.LeftSectorNum == 0 || wall.RightSectorNum == 0);
+                    if (isExit)
                     {
                         int uc;
-                        var p1 = wall.P1;
-                        var p2 = wall.P2;
+                        var p1 = new V2((float)wall.P1.X, (float)wall.P1.Y);
+                        var p2 = new V2((float)wall.P2.X, (float)wall.P2.Y);
                         double d2 = (double)pos2D.MinSquaredDistanceToLineSegment(ref p1, ref p2, out uc);
+                        
                         if (d2 < minDist2)
                         {
                             minDist2 = d2;
                             nearestWall = wall;
-                            var wallVec = p2 - p1;
-                            var startToPos = pos2D - p1;
-                            snapPoint = p1 + startToPos.GetProjection(ref wallVec);
-
-                            // Push 32 units PAST the wall to ensure server triggers transition
-                            var normal = new V2(-(p2.Y - p1.Y), p2.X - p1.X);
-                            normal.ScaleToLength(32.0f);
-                            if ((pos2D - p1) * normal < 0) normal = -normal;
-                            snapPoint = snapPoint + normal; 
+                            
+                            V2 diff = p2 - p1;
+                            float l2 = (float)diff.LengthSquared;
+                            if (l2 > 0)
+                            {
+                                float t = Math.Clamp((float)(((pos2D - p1) * diff) / l2), 0, 1);
+                                snapPoint = p1 + diff * t;
+                            }
+                            else snapPoint = p1;
                         }
                     }
-                }                if (nearestWall != null)
+                }
+
+                // If no exit wall found, try passable walls (might be a dynamic exit)
+                if (nearestWall == null || minDist2 > 512.0 * 512.0)
                 {
-                    Log("MOVE", $"Snapping to wall {nearestWall.Num} at ({snapPoint.X:F1},{snapPoint.Y:F1}) - Distance: {Math.Sqrt(minDist2):F1}");
-                    snapPoint.ConvertToWorld();
-                    avatar.Position3D = new V3(snapPoint.X, avatar.Position3D.Y, snapPoint.Y);
-                    avatar.UpdatePosition(10, Data.RoomInformation);
-                    SendPositionBefore = true;
+                    foreach (var wall in roo.Walls)
+                    {
+                        bool isPassable = (wall.LeftSide != null && wall.LeftSide.Flags.IsPassable) ||
+                                          (wall.RightSide != null && wall.RightSide.Flags.IsPassable);
+                        if (isPassable)
+                        {
+                            int uc;
+                            var p1 = new V2((float)wall.P1.X, (float)wall.P1.Y);
+                            var p2 = new V2((float)wall.P2.X, (float)wall.P2.Y);
+                            double d2 = (double)pos2D.MinSquaredDistanceToLineSegment(ref p1, ref p2, out uc);
+                            if (d2 < minDist2)
+                            {
+                                minDist2 = d2;
+                                nearestWall = wall;
+                                V2 diff = p2 - p1;
+                                float l2 = (float)diff.LengthSquared;
+                                if (l2 > 0)
+                                {
+                                    float t = Math.Clamp((float)(((pos2D - p1) * diff) / l2), 0, 1);
+                                    snapPoint = p1 + diff * t;
+                                }
+                                else snapPoint = p1;
+                            }
+                        }
+                    }
+                }
+
+                if (nearestWall != null && minDist2 < 1024.0 * 1024.0) // Within a reasonable distance
+                {
+                    Log("MOVE", $"Snapping to wall {nearestWall.Num} (Exit: {nearestWall.LeftSectorNum==0||nearestWall.RightSectorNum==0}) at ({snapPoint.X:F1},{snapPoint.Y:F1}) Dist: {Math.Sqrt(minDist2):F1}");
+                    
+                    // Convert snapped ROO back to World (1-based KOD)
+                    // World = (Roo + 1024) / 16
+                    ushort x = (ushort)Math.Clamp((int)Math.Round(snapPoint.X + 1024f) / 16, 0, 65535);
+                    ushort y = (ushort)Math.Clamp((int)Math.Round(snapPoint.Y + 1024f) / 16, 0, 65535);
+
+                    // Ensure we are in the EXACT center of the KOD square (which is 64 units wide)
+                    ushort row = (ushort)(y / 64);
+                    ushort col = (ushort)(x / 64);
+                    
+                    x = (ushort)(col * 64 + 32);
+                    y = (ushort)(row * 64 + 32);
+
+                    Log("MOVE", $"ReqMove to center of square: X={x} Y={y} (Row={row} Col={col})");
+
+                    // Send the precise move request before the GO. ReqMove constructor is (X, Y, Mode, MapID, Angle)
+                    var moveMsg = new ReqMoveMessage(x, y, 0, Data.RoomInformation.RoomID, avatar.AngleUnits);
+                    ServerConnection.SendQueue.Enqueue(moveMsg);
+                    
+                    // Small delay or just enqueue GO immediately
+                    ServerConnection.SendQueue.Enqueue(new ReqGoMessage());
+                    return;
                 }
                 else
                 {
-                    Log("MOVE", "No passable wall found within snapping range.");
+                    Log("MOVE", $"No exit wall found within range. Nearest: {Math.Sqrt(minDist2):F1}");
                 }
             }
+
             if (isRecording) recorder.Record("Go", avatar, $"X:{avatar.CoordinateX},Y:{avatar.CoordinateY}");
             base.SendReqGo(SendPositionBefore);
         }
-
         public void DrawInputField()
         {
             if (!HasTty) return;

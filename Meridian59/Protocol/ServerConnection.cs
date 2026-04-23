@@ -264,6 +264,27 @@ namespace Meridian59.Protocol
             messageController.SignMessage(Message);
         }
 
+        private void LogPacket(string direction, GameMessage message, byte[] buffer, int length)
+        {
+            try
+            {
+                string hex = BitConverter.ToString(buffer, 0, length);
+                string desc = message.Description;
+                if (string.IsNullOrEmpty(desc)) desc = message.GetType().Name;
+                
+                string logMsg = $"[{DateTime.Now:HH:mm:ss.fff}] [{direction}] PI={message.PI} {desc} | RAW: {hex}";
+                System.IO.File.AppendAllText("proto.log", logMsg + Environment.NewLine);
+
+                // Send a concise version to the TUI network tab
+                if (OnLog != null)
+                {
+                    string type = (direction == "RECV") ? "RECV" : "SEND";
+                    OnLog(type, $"PI={message.PI} {desc}");
+                }
+            }
+            catch { }
+        }
+
         /// <summary>
         /// Connect this instance to a Meridian 59 Server.
         /// This will spawn the internal workthread and also
@@ -376,6 +397,9 @@ namespace Meridian59.Protocol
 
                    //serialize
                    Message.WriteTo(sendBuffer, 0);
+
+                   // protocol logging
+                   LogPacket("SEND", Message, sendBuffer, byteLength);
 
                    // write the message bytes to stream
                    tcpStream.Write(sendBuffer, 0, byteLength);
@@ -615,6 +639,10 @@ namespace Meridian59.Protocol
         protected void OnMessageControllerNewMessageAvailable(object sender, GameMessageEventArgs e)
         {
             e.Message.SendRecvTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
+
+            // protocol logging
+            byte[] bytes = e.Message.Bytes;
+            LogPacket("RECV", e.Message, bytes, bytes.Length);
 
             if (e.Message is LoginModeMessage)           
                 HandleLoginModeMessage((LoginModeMessage)e.Message);

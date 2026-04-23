@@ -12,12 +12,12 @@
   <connections selectedindex="0">
     <connection
       name="localhost"
-      host="127.0.0.1"
+      host="900.emfiftynine.info"
       port="5959"
       useipv6="false"
-      stringdictionary="rsc0000-server.rsb"
-      username="tester"
-      password="password"
+      stringdictionary="rsc0000-900.rsb"
+      username="test"
+      password="test"
       character="Tester">
       <ignorelist />
     </connection>
@@ -33,21 +33,20 @@
   </admins>
 
   <keymap>
-    <bind key="UpArrow" action="MoveNorth" />
-    <bind key="DownArrow" action="MoveSouth" />
-    <bind key="LeftArrow" action="MoveWest" />
-    <bind key="RightArrow" action="MoveEast" />
-    <bind key="W" action="MoveNorth" />
-    <bind key="S" action="MoveSouth" />
-    <bind key="A" action="MoveWest" />
-    <bind key="D" action="MoveEast" />
+    <bind key="UpArrow" action="MoveUp" />
+    <bind key="DownArrow" action="MoveDown" />
+    <bind key="LeftArrow" action="MoveLeft" />
+    <bind key="RightArrow" action="MoveRight" />
+    <bind key="W" action="MoveUp" />
+    <bind key="S" action="MoveDown" />
+    <bind key="A" action="MoveLeft" />
+    <bind key="D" action="MoveRight" />
     <bind key="Spacebar" action="Use" />
     <bind key="Q" action="Quit" />
     <bind key="Add" action="ZoomIn" />
     <bind key="OemPlus" action="ZoomIn" />
     <bind key="Subtract" action="ZoomOut" />
     <bind key="OemMinus" action="ZoomOut" />
-    <bind key="R" action="ToggleRotation" />
     <bind key="PageUp" action="ScrollUp" />
     <bind key="PageDown" action="ScrollDown" />
     <bind key="Enter" action="EnterChat" />

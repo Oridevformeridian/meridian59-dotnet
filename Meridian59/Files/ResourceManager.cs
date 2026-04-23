@@ -211,11 +211,10 @@ namespace Meridian59.Files
                 if (rsbFile == null)
                 {
                     // load it
-                    rsbFile = new RsbFile(StringsFolder + "/" + File);
-                    // update the registry                 
+                    rsbFile = new RsbFile(Util.GetActualPath(StringsFolder, File));
+                    // update the registry
                     stringDictionaries[File] = rsbFile;
-                }
-            }
+                }            }
 
             return rsbFile;
         }
@@ -242,7 +241,7 @@ namespace Meridian59.Files
                     if (!fileBuffers.TryPop(out buffer))
                       buffer = new byte[FILEBUFFERSIZE];
 
-                    string file = ObjectsFolder + "/" + File;
+                    string file = Util.GetActualPath(ObjectsFolder, File);
 
                     // load to mem
                     if (Util.LoadFileToBuffer(file, buffer))
@@ -285,13 +284,12 @@ namespace Meridian59.Files
                    if (!fileBuffers.TryPop(out buffer))
                       buffer = new byte[FILEBUFFERSIZE];
 
-                   string file = RoomsFolder + "/" + File;
+                   string file = Util.GetActualPath(RoomsFolder, File);
 
                    // load to mem
                    if (Util.LoadFileToBuffer(file, buffer))
                    {
                       rooFile = new RooFile(file, buffer);
-
                       // resolve resource references (may load texture bgfs)
                       rooFile.ResolveResources(this);
 
@@ -331,14 +329,13 @@ namespace Meridian59.Files
                    if (!fileBuffers.TryPop(out buffer))
                       buffer = new byte[FILEBUFFERSIZE];
 
-                   string file = RoomTexturesFolder + "/" + File;
+                   string file = Util.GetActualPath(RoomTexturesFolder, File);
 
                    // load to mem
                    if (Util.LoadFileToBuffer(file, buffer))
                    {
                       // load it
                       bgfFile = new BgfFile(file, buffer);
-
                       // update the registry
                       if (RoomTextures.TryUpdate(File, bgfFile, null))
                          numLoadedRoomTextures++;
@@ -382,7 +379,7 @@ namespace Meridian59.Files
                 if (filename == null)
                 {
                     // load it
-                    filename = Path.Combine(WavFolder, File);
+                    filename = Util.GetActualPath(WavFolder, File);
 
                     // update the registry
                     if (Wavs.TryUpdate(File, filename, null))
@@ -410,7 +407,7 @@ namespace Meridian59.Files
                 if (filename == null)
                 {
                     // load it
-                    filename =  Path.Combine(MusicFolder, File);
+                    filename = Util.GetActualPath(MusicFolder, File);
 
                     // update the registry
                     if (Music.TryUpdate(File, filename, null))
@@ -625,7 +622,7 @@ namespace Meridian59.Files
 			StringResources.Language = Language;
             
             // Save the MD5 hash of this rsb file as our RsbHash.
-            byte[] rsbMD5Hash = MeridianMD5.ComputeGenericFileMD5(StringsFolder + "/" + RsbFile);
+            byte[] rsbMD5Hash = MeridianMD5.ComputeGenericFileMD5(Util.GetActualPath(StringsFolder, RsbFile));
             Hash128Bit rsbHash = new Hash128Bit();
             rsbHash.HASH1 = BitConverter.ToUInt32(rsbMD5Hash, 0);
             rsbHash.HASH2 = BitConverter.ToUInt32(rsbMD5Hash, 4);

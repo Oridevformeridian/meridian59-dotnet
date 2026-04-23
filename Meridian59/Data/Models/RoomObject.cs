@@ -100,7 +100,9 @@ namespace Meridian59.Data.Models
             ushort coordinateX = BitConverter.ToUInt16(Buffer, cursor);
             cursor += TypeSizes.SHORT;
 
-            position3D = new V3(coordinateX, 0.0f, coordinateY);
+            CoordinateX = coordinateX;
+            CoordinateY = coordinateY;
+            position3D.Y = 0.0f;
 
             angle = MathUtil.BinaryAngleToRadian(BitConverter.ToUInt16(Buffer, cursor));
             cursor += TypeSizes.SHORT;
@@ -202,7 +204,9 @@ namespace Meridian59.Data.Models
             ushort coordinateX = *((ushort*)Buffer);
             Buffer += TypeSizes.SHORT;
 
-            position3D = new V3(coordinateX, 0.0f, coordinateY);
+            CoordinateX = coordinateX;
+            CoordinateY = coordinateY;
+            position3D.Y = 0.0f;
 
             angle = MathUtil.BinaryAngleToRadian(*((ushort*)Buffer));
             Buffer += TypeSizes.SHORT;
@@ -318,15 +322,15 @@ namespace Meridian59.Data.Models
         {
             get 
             { 
-                ushort val = 0;
-
-                // use only positive values
-                if (position3D.Z > 0.0f)
-                    val = Convert.ToUInt16(position3D.Z);
-
-                return val;
+                // ROO (1:4096) = Kod * 64
+                return (ushort)Math.Clamp(position3D.Z * 64.0f, 0, 65535);
             }
-            set { position3D.Z = value; }
+            set 
+            { 
+                // Kod (1:64) = ROO / 64
+                position3D.Z = (value / 64.0f); 
+                RaisePropertyChanged(new PropertyChangedEventArgs(PROPNAME_COORDINATEY));
+            }
         }
        
         /// <summary>
@@ -336,15 +340,15 @@ namespace Meridian59.Data.Models
         {
             get 
             {
-                ushort val = 0;
-
-                // use only positive values
-                if (position3D.X > 0.0f)
-                    val = Convert.ToUInt16(position3D.X);
-
-                return val;
+                // ROO (1:4096) = Kod * 64
+                return (ushort)Math.Clamp(position3D.X * 64.0f, 0, 65535);
             }
-            set { position3D.X = value; }
+            set 
+            { 
+                // Kod (1:64) = ROO / 64
+                position3D.X = (value / 64.0f); 
+                RaisePropertyChanged(new PropertyChangedEventArgs(PROPNAME_COORDINATEX));
+            }
         }
         
         /// <summary>
@@ -1067,8 +1071,8 @@ namespace Meridian59.Data.Models
             endReached = (distance2 < epsilon2);
 
             // convert to ROO coordinates
-            Real xint = (Position3D.X - 64.0f) * 16.0f;
-            Real yint = (Position3D.Z - 64.0f) * 16.0f;
+            Real xint = Position3D.X * 64.0f;
+            Real yint = Position3D.Z * 64.0f;
 
             // get height and leaf at destination from roo
 #if VANILLA
@@ -1168,8 +1172,8 @@ namespace Meridian59.Data.Models
 
             // get height at destination from roo
             // convert to ROO coordinates
-            Real xint = (Position3D.X - 64.0f) * 16.0f;
-            Real yint = (Position3D.Z - 64.0f) * 16.0f;
+            Real xint = Position3D.X * 64.0f;
+            Real yint = Position3D.Z * 64.0f;
 
             // get height from ROO
             Real oldheight = Position3D.Y;

@@ -23,12 +23,14 @@ namespace Meridian59.TuiClient
         Quit,
         ZoomIn,
         ZoomOut,
-        ToggleRotation,
         ScrollUp,
         ScrollDown,
         EnterChat,
         ToggleNoClip,
-        ManualGo
+        ToggleRun,
+        Refresh,
+        ManualGo,
+        ToggleNetTab
     }
 
     public class TuiConfig : BotConfig
@@ -58,11 +60,13 @@ namespace Meridian59.TuiClient
             KeyMap[ConsoleKey.OemPlus]    = TuiAction.ZoomIn;
             KeyMap[ConsoleKey.Subtract]   = TuiAction.ZoomOut;
             KeyMap[ConsoleKey.OemMinus]   = TuiAction.ZoomOut;
-            KeyMap[ConsoleKey.R]          = TuiAction.ToggleRotation;
             KeyMap[ConsoleKey.PageUp]     = TuiAction.ScrollUp;
             KeyMap[ConsoleKey.PageDown]   = TuiAction.ScrollDown;
             KeyMap[ConsoleKey.Enter]      = TuiAction.EnterChat;
+            KeyMap[ConsoleKey.R]          = TuiAction.ToggleRun;
+            KeyMap[ConsoleKey.F5]         = TuiAction.Refresh;
             KeyMap[ConsoleKey.G]          = TuiAction.ManualGo;
+            KeyMap[ConsoleKey.N]          = TuiAction.ToggleNetTab;
         }
 
         public override void ReadXml(XmlDocument Document)

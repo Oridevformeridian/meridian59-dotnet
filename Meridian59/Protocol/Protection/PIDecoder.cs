@@ -101,8 +101,13 @@ namespace Meridian59.Protocol
         /// <returns></returns>
         public byte Decode(byte MessageType)
         {          
-            // Decode the type with the current DecodeByte
-            byte decodedPI = (byte)(((uint)MessageType ^ (uint)(currentDecodeByte & 0xFF)) & 0xFF);
+            // EchoPing (1) is special: 
+            // 1. It is NEVER XOR-encoded.
+            // 2. It DOES NOT trigger a rolling XOR iteration of the decode byte.
+            if (MessageType == 1) return 1;
+
+            // 900 Server does NOT XOR the PIs, so just return the original value.
+            byte decodedPI = MessageType;
 
             if (enabled)
             {
@@ -111,7 +116,7 @@ namespace Meridian59.Protocol
                     cursor = 0;
 
                 // Iterate the DecodeByte based on stringresource
-                currentDecodeByte += ((uint)stringBytes[cursor] & ANDValue);
+                currentDecodeByte += ((uint)stringBytes[cursor] & 0xFF);
 
                 // raise cursor
                 cursor++;
@@ -127,12 +132,16 @@ namespace Meridian59.Protocol
         /// <param name="ResourceID">Is attached on PingReply</param>
         public void Update(byte NewDecodeByte, uint ResourceID)
         {
-            // Update the decode byte
-            currentDecodeByte = (uint)(NewDecodeByte ^ XORValue);
+            byte actualXor = (ResourceID == 20143) ? (byte)0x00 : XORValue;
 
+            // Update the decode byte
+            currentDecodeByte = (uint)((NewDecodeByte ^ actualXor) & 0xFF);
+            
             // zero resourceid indicates use of fallbackstring
             if (ResourceID == 0)
+            {
                 stringBytes = Util.Encoding.GetBytes(FALLBACKSTRING);
+            }
 
             else
             {

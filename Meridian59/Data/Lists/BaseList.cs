@@ -178,8 +178,10 @@ namespace Meridian59.Data.Lists
         {
             // remove one-by-one, backward iteration
             // also allows detaching event listeners properply
-            for (int i = Count - 1; i >= 0; i--)            
-                RemoveAt(i);
+            while (Count > 0)
+            {
+                RemoveAt(Count - 1);
+            }
 
             OnListChanged(this, new ListChangedEventArgs(ListChangedType.Reset, -1));
         }

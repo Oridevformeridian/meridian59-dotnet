@@ -595,7 +595,9 @@ namespace Meridian59.Client
         /// (i.e. account blocked, maintenance...)
         /// </summary>
         /// <param name="Message"></param>
-        protected abstract void HandleLoginModeMessageMessage(LoginModeMessageMessage Message);     
+        protected virtual void HandleLoginModeMessageMessage(LoginModeMessageMessage Message)
+        {
+        }     
 
         /// <summary>
         /// Overwrite with your code for a mismatch resources situation (update/download)
@@ -1718,7 +1720,7 @@ namespace Meridian59.Client
             // lookup the sector this new kod position would mean on the server
             // this can be different from the sector indicated by our float position
             RooSubSector currentLeaf = null;
-            CurrentRoom.GetHeightAt(X * 16 - 1024, Y * 16 - 1024, out currentLeaf, true, false);
+            CurrentRoom.GetHeightAt((float)avatar.Position3D.X, (float)avatar.Position3D.Z, out currentLeaf, true, false);
             RooSector currentSector = (currentLeaf != null) ? currentLeaf.Sector : null;
 
             // override timer to make sure we immediately inform server when moved on another sector
@@ -2943,13 +2945,11 @@ namespace Meridian59.Client
                 V3 start = avatar.Position3D;
                 V2 start2D = avatar.Position2D;
 
-                // step based on direction and tick delta
-                V2 step = Direction * Speed * (Real)GameTick.Span * GeometryConstants.MOVEBASECOEFF;
+                // step based on direction and tick delta (Span is in ms, so divide by 1000)
+                V2 step = Direction * Speed * (Real)GameTick.Span * 0.0004f;
 
                 // apply step on start ("end candidate")
-                V2 end = start2D + step;
-
-                //// 1. VERIFY OBJECT COLLISION
+                V2 end = start2D + step;                //// 1. VERIFY OBJECT COLLISION
 
                 // check against roomnodes which have nomoveon set
                 foreach (RoomObject obj in Data.RoomObjects)
@@ -3006,7 +3006,7 @@ namespace Meridian59.Client
                 step = CurrentRoom.VerifyMove(ref rooStart, ref rooEnd, Speed);
 
                 // convert back to worldsize
-                step.Scale(0.0625f);
+                step.Scale(1.0f);
 
                 //// 3. APPLY MOVE
                

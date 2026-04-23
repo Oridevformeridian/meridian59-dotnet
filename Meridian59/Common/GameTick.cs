@@ -35,8 +35,8 @@ namespace Meridian59.Common
         public double INTERVALALIAS          = 500.0;
 
 #if VANILLA
-        public double INTERVALREQMOVE   = 1000.0;
-        public double INTERVALREQTURN   = 1000.0;
+        public double INTERVALREQMOVE   = 100.0;
+        public double INTERVALREQTURN   = 100.0;
         public double INTERVALREQATTACK = 1000.0;
         public double INTERVALREQCAST   = 1000.0;
 #elif OPENMERIDIAN

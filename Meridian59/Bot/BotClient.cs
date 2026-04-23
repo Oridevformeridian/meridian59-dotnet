@@ -422,9 +422,17 @@ namespace Meridian59.Bot
         /// <param name="Message"></param>
         protected override void HandleGetLoginMessage(GetLoginMessage Message)
         {
+            Log("SYS", "HandleGetLoginMessage called.");
             // send login message
             if (Config.SelectedConnectionInfo != null)
+            {
+                Log("SYS", $"Sending login for user: {Config.SelectedConnectionInfo.Username}");
                 SendLoginMessage(Config.SelectedConnectionInfo.Username, Config.SelectedConnectionInfo.Password);
+            }
+            else
+            {
+                Log("ERROR", "SelectedConnectionInfo is NULL!");
+            }
         }
 
         /// <summary>
@@ -643,11 +651,19 @@ namespace Meridian59.Bot
                     break;
 
                 case ConsoleKey.R:
-                    // log reload
-                    Log("SYS", LOG_RELOADCONFIG);
+                    // Send rest command
+                    Log("SYS", "Resting...");
+                    var restCmd = new UserCommandRest();
+                    ServerConnection.SendQueue.Enqueue(new UserCommandMessage(restCmd, null));
+                    Data.IsResting = true;
+                    break;
 
-                    // reload
-                    Config.Load(Config.ConfigFile, Config.ConfigFileAlt);
+                case ConsoleKey.S:
+                    // Send stand command
+                    Log("SYS", "Standing up...");
+                    var standCmd = new UserCommandStand();
+                    ServerConnection.SendQueue.Enqueue(new UserCommandMessage(standCmd, null));
+                    Data.IsResting = false;
                     break;
 
                 case ConsoleKey.M:
@@ -656,10 +672,10 @@ namespace Meridian59.Bot
                     DumpMetrics();
                     break;
 
-                case ConsoleKey.S:
+                case ConsoleKey.G:
                     // log reload
-                    Log("SYS", "Saving metrics to file...");
-                    SaveMetrics();
+                    Log("SYS", "Dumping metrics time series...");
+                    DumpMetricsSeries();
                     break;
             }
         }

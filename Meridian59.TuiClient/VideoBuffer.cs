@@ -6,6 +6,8 @@ namespace Meridian59.TuiClient
     {
         public char Char;
         public float Intensity;
+        public ConsoleColor Color;
+        public ConsoleColor BgColor;
     }
 
     public class VideoBuffer
@@ -30,16 +32,22 @@ namespace Meridian59.TuiClient
                 {
                     Cells[x, y].Char = ' ';
                     Cells[x, y].Intensity = 0.0f;
+                    Cells[x, y].Color = ConsoleColor.Gray;
+                    Cells[x, y].BgColor = ConsoleColor.Black;
                 }
             }
         }
 
-        public void Set(int x, int y, char c, float intensity = 1.0f)
+        public void Set(int x, int y, char c, float intensity = 1.0f,
+                        ConsoleColor color = ConsoleColor.Gray,
+                        ConsoleColor bgColor = ConsoleColor.Black)
         {
             if (x >= 0 && x < Width && y >= 0 && y < Height)
             {
                 Cells[x, y].Char = c;
                 Cells[x, y].Intensity = intensity;
+                Cells[x, y].Color = color;
+                Cells[x, y].BgColor = bgColor;
             }
         }
     }

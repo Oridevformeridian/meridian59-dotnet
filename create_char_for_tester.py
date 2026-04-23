@@ -5,7 +5,7 @@ import struct
 import ctypes
 
 # Paths
-M59_DIR = '/var/home/mycroft/src/Meridian59'
+M59_DIR = '/home/mycroft/src/Meridian59'
 TESTS_DIR = os.path.join(M59_DIR, 'tests')
 
 # Add to path
@@ -85,7 +85,7 @@ class CharCreator(MeridianClient):
 async def main():
     # We need to run from M59_DIR to find kodbase.txt etc.
     os.chdir(M59_DIR)
-    client = CharCreator("127.0.0.1", 5959, "tester", "password", verbose=True)
+    client = CharCreator("138.197.44.253", 5959, "tester", "password", verbose=True)
     try:
         await asyncio.wait_for(client.run(), timeout=15.0)
     except Exception as e:

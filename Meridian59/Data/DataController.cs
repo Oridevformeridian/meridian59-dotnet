@@ -456,6 +456,12 @@ namespace Meridian59.Data
         public bool LogPingMessages { get; set; }
 
         /// <summary>
+        /// The name of the character we expect to login as.
+        /// Used for fallback identification in RoomContents.
+        /// </summary>
+        public string ExpectedAvatarName { get; set; }
+
+        /// <summary>
         /// The ID of your avatar
         /// </summary>
         private uint avatarID;
@@ -1861,7 +1867,7 @@ namespace Meridian59.Data
                     HandleEffect((EffectMessage)Message);
                     break;
 
-#if !VANILLA
+#if !VANILLA && !OPENMERIDIAN
                 case MessageTypeGameMode.MovementSpeedPercent:      // 71
                     HandleMovementSpeedPercent((MovementSpeedPercentMessage)Message);
                     break;
@@ -1896,11 +1902,12 @@ namespace Meridian59.Data
                     break;
 
                 case MessageTypeGameMode.PlayerAdd:                 // 137
+                    HandlePlayerAdd((PlayerAddMessage)Message);
                     break;
 
                 case MessageTypeGameMode.PlayerRemove:              // 138
+                    HandlePlayerRemove((PlayerRemoveMessage)Message);
                     break;
-
                 case MessageTypeGameMode.Characters:                // 139
                     break;
 
@@ -2191,6 +2198,12 @@ namespace Meridian59.Data
 
         protected virtual void HandleRoomContents(RoomContentsMessage Message)
         {
+            Logger.Log("SYNC", LogType.Info, $"HandleRoomContents: objCount={Message.RoomObjects.Length} AvatarID={AvatarID}");
+            foreach (var obj in Message.RoomObjects)
+            {
+                bool isMe = obj.ID == AvatarID;
+                Logger.Log("SYNC", LogType.Info, $"  Obj {obj.ID}{(isMe ? " <AVATAR>" : "")}: {obj.Name} KodX={obj.CoordinateX} KodY={obj.CoordinateY} RawX={obj.Position3D.X} RawZ={obj.Position3D.Z}");
+            }
             // clear all old ones
             RoomObjects.Clear();
 
@@ -2203,7 +2216,20 @@ namespace Meridian59.Data
             foreach (RoomObject Model in Message.RoomObjects)
             {
                 // our avatar
-                if (Model.ID == AvatarID)
+                bool isMatch = (Model.ID == AvatarID);
+
+                // Fallback: If AvatarID is invalid (FFFFFFFF), try to match by name
+                if (!isMatch && AvatarID == UInt32.MaxValue && !string.IsNullOrEmpty(ExpectedAvatarName))
+                {
+                    if (Model.Name != null && Model.Name.Equals(ExpectedAvatarName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        isMatch = true;
+                        // Successfully identified our ID via name fallback!
+                        AvatarID = Model.ID;
+                    }
+                }
+
+                if (isMatch)
                 {
                     // mark it and save ref
                     Model.IsAvatar = true;
@@ -2215,6 +2241,19 @@ namespace Meridian59.Data
             if (avatar == null)
             {
                 Log("DEBUG", "AVATAR NOT FOUND in RoomContents object list!");
+                // Create a temporary avatar object if not found in list (should not happen normally)
+                avatar = new RoomObject() { ID = AvatarID, IsAvatar = true };
+                avatar.CoordinateX = roomInformation.PosX;
+                avatar.CoordinateY = roomInformation.PosY;
+            }
+            else
+            {
+                // Force coordinates from RoomInfo if model came in with 0,0
+                if (avatar.CoordinateX == 0 && avatar.CoordinateY == 0)
+                {
+                    avatar.CoordinateX = roomInformation.PosX;
+                    avatar.CoordinateY = roomInformation.PosY;
+                }
             }
 
             // now add the avatar first
@@ -2266,7 +2305,7 @@ namespace Meridian59.Data
                 Model.UpdateViewerAngle(ref viewPos2D);
                 
                 // add to list (Avatar is already added)
-                if (!Model.IsAvatar)
+                if (!Model.IsAvatar && Model.ID != 0)
                     RoomObjects.Add(Model);
             }
 
@@ -2361,12 +2400,18 @@ namespace Meridian59.Data
             RoomObject roomObject = RoomObjects.GetItemByID(Message.ObjectID);
             if (roomObject != null)
             {
+                if (roomObject.IsAvatar) Logger.Log("SYNC", LogType.Info, $"RECV MOVE for Avatar: to Kod({Message.NewCoordinateX},{Message.NewCoordinateY})");
 #if !VANILLA
                 // set new angle from message
                 roomObject.AngleUnits = Message.Angle;
 #endif
                 // create destination from values
-                V2 destination = new V2(Message.NewCoordinateX, Message.NewCoordinateY);
+                // 900 Server sends fine coordinates (0-65535). 
+                // We convert them to ROO scale (1:64).
+                V2 destination = new V2(
+                    (Message.NewCoordinateX / 64.0f),
+                    (Message.NewCoordinateY / 64.0f)
+                );
 
                 // initiate movement
                 roomObject.StartMoveTo(ref destination, (byte)Message.MovementSpeed);                            
@@ -2382,7 +2427,8 @@ namespace Meridian59.Data
 
         protected virtual void HandlePlayer(PlayerMessage Message)
         {
-            Logger.Log("DataController", LogType.Info, "HandlePlayer: AvatarID=" + Message.RoomInfo.AvatarID);
+            AvatarID = Message.RoomInfo.AvatarID;
+
             // detach old sectormove listener
             if (RoomInformation.ResourceRoom != null)
                 RoomInformation.ResourceRoom.SectorMoved -= OnRoomSectorMoved;
@@ -2394,8 +2440,14 @@ namespace Meridian59.Data
             if (RoomInformation.ResourceRoom != null)
                 RoomInformation.ResourceRoom.SectorMoved += OnRoomSectorMoved;
 
-            // update avatar id
-            AvatarID = Message.RoomInfo.AvatarID;
+            // Update avatar position if it exists
+            if (AvatarObject != null)
+            {
+                AvatarObject.CoordinateX = Message.RoomInfo.PosX;
+                AvatarObject.CoordinateY = Message.RoomInfo.PosY;
+                if (RoomInformation.ResourceRoom != null)
+                    AvatarObject.UpdateHeightPosition(RoomInformation);
+            }
 
             // clear roombuffs
             RoomBuffs.Clear();

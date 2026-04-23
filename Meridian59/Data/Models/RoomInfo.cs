@@ -163,6 +163,12 @@ namespace Meridian59.Data.Models
             roomSecurity = BitConverter.ToUInt32(Buffer, cursor);
             cursor += TypeSizes.INT;
 
+            posX = BitConverter.ToUInt16(Buffer, cursor);
+            cursor += TypeSizes.SHORT;
+
+            posY = BitConverter.ToUInt16(Buffer, cursor);
+            cursor += TypeSizes.SHORT;
+
             ambientLight = Buffer[cursor];
             cursor++;
 
@@ -305,6 +311,8 @@ namespace Meridian59.Data.Models
         protected uint roomFileRID;
         protected uint roomNameRID;
         protected uint roomSecurity;
+        protected ushort posX;
+        protected ushort posY;
         protected byte ambientLight;
         protected byte avatarLight;
         protected uint backgroundFileRID;
@@ -406,6 +414,30 @@ namespace Meridian59.Data.Models
                 {
                     roomSecurity = value;
                     RaisePropertyChanged(new PropertyChangedEventArgs(PROPNAME_ROOMSECURITY));
+                }
+            }
+        }
+        public ushort PosX
+        {
+            get { return posX; }
+            set
+            {
+                if (posX != value)
+                {
+                    posX = value;
+                    RaisePropertyChanged(new PropertyChangedEventArgs("PosX"));
+                }
+            }
+        }
+        public ushort PosY
+        {
+            get { return posY; }
+            set
+            {
+                if (posY != value)
+                {
+                    posY = value;
+                    RaisePropertyChanged(new PropertyChangedEventArgs("PosY"));
                 }
             }
         }
@@ -722,6 +754,8 @@ namespace Meridian59.Data.Models
                 RoomFileRID = Model.RoomFileRID;
                 RoomNameRID = Model.RoomNameRID;
                 RoomSecurity = Model.RoomSecurity;
+                PosX = Model.PosX;
+                PosY = Model.PosY;
                 AmbientLight = Model.AmbientLight;
                 AvatarLight = Model.AvatarLight;
                 BackgroundFileRID = Model.BackgroundFileRID;
@@ -750,6 +784,8 @@ namespace Meridian59.Data.Models
                 roomFileRID = Model.RoomFileRID;
                 roomNameRID = Model.RoomNameRID;
                 roomSecurity = Model.RoomSecurity;
+                posX = Model.PosX;
+                posY = Model.PosY;
                 ambientLight = Model.AmbientLight;
                 avatarLight = Model.AvatarLight;
                 backgroundFileRID = Model.BackgroundFileRID;
