@@ -30,7 +30,8 @@ namespace Meridian59.TuiClient
         ToggleRun,
         Refresh,
         ManualGo,
-        ToggleNetTab
+        ToggleNetTab,
+        OpenCharSheet
     }
 
     public class TuiConfig : BotConfig
@@ -67,6 +68,7 @@ namespace Meridian59.TuiClient
             KeyMap[ConsoleKey.F5]         = TuiAction.Refresh;
             KeyMap[ConsoleKey.G]          = TuiAction.ManualGo;
             KeyMap[ConsoleKey.N]          = TuiAction.ToggleNetTab;
+            KeyMap[ConsoleKey.C]          = TuiAction.OpenCharSheet;
         }
 
         public override void ReadXml(XmlDocument Document)

@@ -27,8 +27,11 @@ namespace Meridian59.TuiClient
         MailCompose,
         NewsList,
         NewsRead,
-        NewsCompose
+        NewsCompose,
+        CharSheet
     }
+
+    public enum CharTab { Stats = 0, Skills = 1, Spells = 2, Inventory = 3 }
 
     public enum CharCreationState
     {
@@ -79,6 +82,8 @@ namespace Meridian59.TuiClient
         private int popupScrollOffset = 0;
         private object currentPopupItem = null;
         private bool popupJustClosed = false;
+        private CharTab charTab = CharTab.Stats;
+        private int charScrollOffset = 0;
 
         // Composition State
         private string composeRecipient = "";
@@ -593,7 +598,7 @@ namespace Meridian59.TuiClient
 
                 // Hint bar at h-1
                 Console.SetCursorPosition(0, h - 1);
-                string hints = " [Enter]Chat  [Arrows/WASD]Move  [R]un  [F5]Refresh  [+/-]Zoom  [Q]uit";
+                string hints = " [Enter]Chat  [WASD]Move  [C]harSheet  [R]un  [F5]Refresh  [+/-]Zoom  [Q]uit";
                 Console.Write(SafeLine("╚" + hints.PadRight(78, '═') + "╝", w - 1));
 
                 DrawStats();
@@ -869,8 +874,185 @@ namespace Meridian59.TuiClient
                 && !m.Sender.Equals("none", StringComparison.OrdinalIgnoreCase)).ToList();
         }
 
+        // ── Character Sheet ──────────────────────────────────────────────────────
+
+        private void RenderScrollableRows(List<(string text, ConsoleColor color)> rows,
+            int contentX, int contentY, int contentW, int contentH)
+        {
+            charScrollOffset = Math.Max(0, Math.Min(charScrollOffset, Math.Max(0, rows.Count - contentH)));
+            for (int i = 0; i < contentH; i++)
+            {
+                int idx = i + charScrollOffset;
+                Console.SetCursorPosition(contentX, contentY + i);
+                if (idx < rows.Count)
+                {
+                    Console.ForegroundColor = rows[idx].color;
+                    Console.Write(SafeLine(rows[idx].text.PadRight(contentW), contentW));
+                    Console.ResetColor();
+                }
+                else
+                {
+                    Console.Write(new string(' ', contentW));
+                }
+            }
+        }
+
+        private void DrawCharStats(int contentX, int contentY, int contentW, int contentH)
+        {
+            var rows = new List<(string, ConsoleColor)>();
+            foreach (var s in Data.AvatarAttributes.ToList())
+                rows.Add(($"{s.ResourceName,-24} {s.ValueCurrent,5}", ConsoleColor.Gray));
+            if (rows.Count == 0)
+                rows.Add(("  (No data yet)", ConsoleColor.DarkGray));
+            RenderScrollableRows(rows, contentX, contentY, contentW, contentH);
+        }
+
+        private void DrawCharSkills(int contentX, int contentY, int contentW, int contentH)
+        {
+            var rows = new List<(string, ConsoleColor)>();
+            int lastGroup = -1;
+            int groupNum = 0;
+            foreach (var s in Data.AvatarSkills.ToList().OrderBy(x => x.Num))
+            {
+                int group = s.Num / 20;
+                if (group != lastGroup)
+                {
+                    groupNum++;
+                    string sep = $"─── Level {groupNum} " + new string('─', Math.Max(0, contentW - 12));
+                    rows.Add((sep, ConsoleColor.DarkGray));
+                    lastGroup = group;
+                }
+                rows.Add(($"  {s.ResourceName,-26} {s.SkillPoints,2}%", ConsoleColor.Gray));
+            }
+            if (rows.Count == 0)
+                rows.Add(("  (No skills)", ConsoleColor.DarkGray));
+            RenderScrollableRows(rows, contentX, contentY, contentW, contentH);
+        }
+
+        private void DrawCharSpells(int contentX, int contentY, int contentW, int contentH)
+        {
+            var rows = new List<(string, ConsoleColor)>();
+            var schoolOrder = new[] {
+                SchoolType.Shalille, SchoolType.Qor, SchoolType.Kraanan,
+                SchoolType.Faren, SchoolType.Riija, SchoolType.Jala, SchoolType.WeaponCraft
+            };
+
+            var spellLookup = new Dictionary<uint, SchoolType>();
+            foreach (var so in Data.SpellObjects.ToList())
+                spellLookup[so.ID] = so.SchoolType;
+
+            var spells = Data.AvatarSpells.ToList()
+                .Select(s => (spell: s,
+                              school: spellLookup.TryGetValue(s.ObjectID, out var sc) ? sc : (SchoolType)0))
+                .OrderBy(x => { int i = Array.IndexOf(schoolOrder, x.school); return i < 0 ? 99 : i; })
+                .ThenBy(x => x.spell.ResourceName)
+                .ToList();
+
+            SchoolType lastSchool = (SchoolType)255;
+            foreach (var (spell, school) in spells)
+            {
+                if (school != lastSchool)
+                {
+                    string schoolName = school == 0 ? "Unknown" : school.ToString();
+                    string sep = $"─── {schoolName} " + new string('─', Math.Max(0, contentW - schoolName.Length - 5));
+                    rows.Add((sep, ConsoleColor.DarkCyan));
+                    lastSchool = school;
+                }
+                rows.Add(($"  ✓ {spell.ResourceName}", ConsoleColor.Gray));
+            }
+            if (rows.Count == 0)
+                rows.Add(("  (No spells)", ConsoleColor.DarkGray));
+            RenderScrollableRows(rows, contentX, contentY, contentW, contentH);
+        }
+
+        private void DrawCharInventory(int contentX, int contentY, int contentW, int contentH)
+        {
+            var rows = new List<(string, ConsoleColor)>();
+            foreach (var obj in Data.InventoryObjects.ToList().OrderBy(o => o.Name))
+            {
+                string line = obj.Count > 0
+                    ? $"{obj.Name,-32} x{obj.Count,4}"
+                    : $"{obj.Name}";
+                rows.Add((line, ConsoleColor.Gray));
+            }
+            if (rows.Count == 0)
+                rows.Add(("  (Empty)", ConsoleColor.DarkGray));
+            RenderScrollableRows(rows, contentX, contentY, contentW, contentH);
+        }
+
+        private void DrawCharSheet(int startX, int startY, int width, int height)
+        {
+            int w = Console.WindowWidth;
+            if (startX + width > w - 1) width = w - 1 - startX;
+            if (width < 20 || height < 8) return;
+
+            // Top border with centred title
+            string titleText = " Character ";
+            int leftPad  = (width - 2 - titleText.Length) / 2;
+            int rightPad = width - 2 - titleText.Length - leftPad;
+            Console.SetCursorPosition(startX, startY);
+            Console.Write(SafeLine("╔" + new string('═', leftPad) + titleText + new string('═', rightPad) + "╗", width));
+
+            // Side borders for all interior rows
+            for (int i = 1; i < height - 1; i++)
+            {
+                Console.SetCursorPosition(startX, startY + i);
+                Console.Write(SafeLine("║" + new string(' ', width - 2) + "║", width));
+            }
+
+            // Bottom border with centred footer hint
+            string footerText = " [Esc:Close] [←/→:Tab] [↑↓:Scroll] ";
+            if (footerText.Length > width - 4) footerText = footerText[..(width - 4)];
+            int flPad = (width - 2 - footerText.Length) / 2;
+            int frPad = width - 2 - footerText.Length - flPad;
+            Console.SetCursorPosition(startX, startY + height - 1);
+            Console.Write(SafeLine("╚" + new string('═', flPad) + footerText + new string('═', frPad) + "╝", width));
+
+            // Tab bar (row startY+1)
+            var tabs = new[] { ("STATS", CharTab.Stats), ("SKILLS", CharTab.Skills),
+                               ("SPELLS", CharTab.Spells), ("INV", CharTab.Inventory) };
+            int tabX = startX + 1;
+            foreach (var (label, tab) in tabs)
+            {
+                Console.SetCursorPosition(tabX, startY + 1);
+                Console.ForegroundColor = tab == charTab ? ConsoleColor.White : ConsoleColor.DarkGray;
+                string item = $"[{label}] ";
+                Console.Write(item);
+                Console.ResetColor();
+                tabX += item.Length;
+            }
+            // Pad rest of tab row
+            int remaining = startX + width - 1 - tabX;
+            if (remaining > 0) { Console.SetCursorPosition(tabX, startY + 1); Console.Write(new string(' ', remaining)); }
+
+            // Separator under tab bar (row startY+2)
+            Console.SetCursorPosition(startX, startY + 2);
+            Console.Write(SafeLine("╠" + new string('═', width - 2) + "╣", width));
+
+            // Content area
+            int contentX = startX + 2;
+            int contentY = startY + 3;
+            int contentW = width - 4;
+            int contentH = height - 5;
+            if (contentW < 5 || contentH < 1) return;
+
+            switch (charTab)
+            {
+                case CharTab.Stats:     DrawCharStats(contentX, contentY, contentW, contentH);     break;
+                case CharTab.Skills:    DrawCharSkills(contentX, contentY, contentW, contentH);    break;
+                case CharTab.Spells:    DrawCharSpells(contentX, contentY, contentW, contentH);    break;
+                case CharTab.Inventory: DrawCharInventory(contentX, contentY, contentW, contentH); break;
+            }
+        }
+
         private void DrawPopup(int startX, int startY, int width, int height)
         {
+            if (activePopup == PopupMode.CharSheet)
+            {
+                DrawCharSheet(startX, startY, width, height);
+                return;
+            }
+
             int w = Console.WindowWidth;
             if (startX + width > w - 1) width = w - 1 - startX;
             if (width < 5) return;
@@ -1018,6 +1200,47 @@ namespace Meridian59.TuiClient
 
         private void ProcessPopupKeyPress(ConsoleKeyInfo key)
         {
+            if (activePopup == PopupMode.CharSheet)
+            {
+                int pageSize = Math.Max(1, Console.WindowHeight - 13);
+                switch (key.Key)
+                {
+                    case ConsoleKey.Escape:
+                        activePopup = PopupMode.None;
+                        popupJustClosed = true;
+                        charScrollOffset = 0;
+                        DrawMap();
+                        break;
+                    case ConsoleKey.LeftArrow:
+                        charTab = (CharTab)Math.Max(0, (int)charTab - 1);
+                        charScrollOffset = 0;
+                        DrawMap();
+                        break;
+                    case ConsoleKey.RightArrow:
+                        charTab = (CharTab)Math.Min(3, (int)charTab + 1);
+                        charScrollOffset = 0;
+                        DrawMap();
+                        break;
+                    case ConsoleKey.UpArrow:
+                        charScrollOffset = Math.Max(0, charScrollOffset - 1);
+                        DrawMap();
+                        break;
+                    case ConsoleKey.DownArrow:
+                        charScrollOffset++;
+                        DrawMap();
+                        break;
+                    case ConsoleKey.PageUp:
+                        charScrollOffset = Math.Max(0, charScrollOffset - pageSize);
+                        DrawMap();
+                        break;
+                    case ConsoleKey.PageDown:
+                        charScrollOffset += pageSize;
+                        DrawMap();
+                        break;
+                }
+                return;
+            }
+
             if (activePopup == PopupMode.MailCompose || activePopup == PopupMode.NewsCompose)
             {
                 HandleComposeInput(key);
@@ -1381,6 +1604,13 @@ namespace Meridian59.TuiClient
                 case TuiAction.ManualGo:
                     Log("MOVE", $"Manual ReqGo at X={Data.AvatarObject?.CoordinateX} Y={Data.AvatarObject?.CoordinateY}");
                     SendReqGo(true);
+                    break;
+
+                case TuiAction.OpenCharSheet:
+                    activePopup = PopupMode.CharSheet;
+                    charTab = CharTab.Stats;
+                    charScrollOffset = 0;
+                    DrawMap();
                     break;
 
                 case TuiAction.Mail:
