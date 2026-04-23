@@ -823,8 +823,8 @@ namespace Meridian59.TuiClient
                 string coordStr = "";
                 if (mapAvatar != null)
                 {
-                    float tileCol = mapAvatar.Position3D.X - 64.0f;
-                    float tileRow = mapAvatar.Position3D.Z - 64.0f;
+                    float tileCol = (float)(mapAvatar.Position3D.X - 64.0);
+                    float tileRow = (float)(mapAvatar.Position3D.Z - 64.0);
                     coordStr = $" X:{mapAvatar.CoordinateX,4} Y:{mapAvatar.CoordinateY,4}  Tile:{tileCol,4:F1},{tileRow,4:F1}";
                 }
                 int availW = width - 1;

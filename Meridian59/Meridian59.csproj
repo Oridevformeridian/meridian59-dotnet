@@ -4,7 +4,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>disable</Nullable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-    <SignAssembly>true</SignAssembly>
+    <SignAssembly Condition="'$(Configuration)' == 'Release'">true</SignAssembly>
     <AssemblyOriginatorKeyFile>Meridian59.snk</AssemblyOriginatorKeyFile>
     <DefineConstants>TRACE;MONO;DRAWING;CONCURRENT;X64</DefineConstants>
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
