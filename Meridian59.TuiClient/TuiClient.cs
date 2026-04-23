@@ -624,7 +624,7 @@ namespace Meridian59.TuiClient
 
                 // Hint bar at h-1
                 Console.SetCursorPosition(0, h - 1);
-                string hints = " [Enter]Chat [WASD]Move [C]harSheet [F]ight [T]arget [R]un [+/-]Zoom [Q]uit";
+                string hints = " [Enter]Chat [QWEASDZX]Move [C]harSheet [F]ight [T]arget [R]un [+/-]Zoom [Esc]Quit";
                 Console.Write(SafeLine("╚" + hints.PadRight(78, '═') + "╝", w - 1));
 
                 DrawStats();
@@ -1755,10 +1755,14 @@ namespace Meridian59.TuiClient
                     IsRunning = false;
                     break;
 
-                case TuiAction.MoveUp:    HandleMovement( 0, -1); break;
-                case TuiAction.MoveDown:  HandleMovement( 0,  1); break;
-                case TuiAction.MoveLeft:  HandleMovement(-1,  0); break;
-                case TuiAction.MoveRight: HandleMovement( 1,  0); break;
+                case TuiAction.MoveUp:        HandleMovement( 0, -1); break;
+                case TuiAction.MoveDown:      HandleMovement( 0,  1); break;
+                case TuiAction.MoveLeft:      HandleMovement(-1,  0); break;
+                case TuiAction.MoveRight:     HandleMovement( 1,  0); break;
+                case TuiAction.MoveUpLeft:    HandleMovement(-1, -1); break;
+                case TuiAction.MoveUpRight:   HandleMovement( 1, -1); break;
+                case TuiAction.MoveDownLeft:  HandleMovement(-1,  1); break;
+                case TuiAction.MoveDownRight: HandleMovement( 1,  1); break;
 
                 case TuiAction.ScrollUp:
                     scrollOffset = Math.Min(scrollOffset + 5, logBuffer.Count - 5);
