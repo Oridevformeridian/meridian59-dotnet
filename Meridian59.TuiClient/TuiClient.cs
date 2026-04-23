@@ -847,6 +847,16 @@ namespace Meridian59.TuiClient
                 {
                     if (popupJustClosed)
                     {
+                        // Physically blank the entire inner map area so the differential
+                        // renderer doesn't leave popup text in cells it thinks are already ' '
+                        Console.BackgroundColor = ConsoleColor.Black;
+                        Console.ForegroundColor = ConsoleColor.Gray;
+                        string blank = new string(' ', width - 2);
+                        for (int row = startY + 1; row < startY + height - 1; row++)
+                        {
+                            Console.SetCursorPosition(startX + 1, row);
+                            Console.Write(blank);
+                        }
                         renderer.Invalidate();
                         popupJustClosed = false;
                     }
