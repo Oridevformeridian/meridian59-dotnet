@@ -1055,7 +1055,11 @@ namespace Meridian59.TuiClient
                     rows.Add((sep, ConsoleColor.DarkGray));
                     lastGroup = group;
                 }
-                rows.Add(($"  {s.ResourceName,-26} {s.SkillPoints,2}%", ConsoleColor.Gray));
+                var skillColor = s.SkillPoints >= 99 ? ConsoleColor.Green
+                    : s.SkillPoints >= 50 ? ConsoleColor.Yellow
+                    : s.SkillPoints >= 20 ? ConsoleColor.DarkYellow
+                    : ConsoleColor.Red;
+                rows.Add(($"  {s.ResourceName,-26} {s.SkillPoints,2}%", skillColor));
             }
             if (rows.Count == 0)
                 rows.Add(("  (No skills)", ConsoleColor.DarkGray));
@@ -1093,7 +1097,11 @@ namespace Meridian59.TuiClient
                     lastSchool = school;
                 }
                 spellDisplayRow.Add(rows.Count);
-                rows.Add(($"  ✓ {spell.ResourceName}", ConsoleColor.Gray));
+                var spellColor = spell.SkillPoints >= 99 ? ConsoleColor.Green
+                    : spell.SkillPoints >= 50 ? ConsoleColor.Yellow
+                    : spell.SkillPoints >= 20 ? ConsoleColor.DarkYellow
+                    : ConsoleColor.Red;
+                rows.Add(($"  ✓ {spell.ResourceName,-26} {spell.SkillPoints,2}%", spellColor));
             }
             if (rows.Count == 0) { rows.Add(("  (No spells)", ConsoleColor.DarkGray)); RenderScrollableRows(rows, contentX, contentY, contentW, contentH); return; }
 
