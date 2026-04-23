@@ -53,6 +53,7 @@
 /Resources/bgfobjects/*.bgf
 /Resources/bgftextures/*.bgf
 /Resources/mails
+/Resources/rooms/*.roo
 
 # Others
 /Meridian59.BgfService/Bin
