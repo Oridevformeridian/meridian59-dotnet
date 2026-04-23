@@ -31,7 +31,9 @@ namespace Meridian59.TuiClient
         Refresh,
         ManualGo,
         ToggleNetTab,
-        OpenCharSheet
+        OpenCharSheet,
+        ToggleAutoAttack,
+        TargetNearest
     }
 
     public class TuiConfig : BotConfig
@@ -69,6 +71,8 @@ namespace Meridian59.TuiClient
             KeyMap[ConsoleKey.G]          = TuiAction.ManualGo;
             KeyMap[ConsoleKey.N]          = TuiAction.ToggleNetTab;
             KeyMap[ConsoleKey.C]          = TuiAction.OpenCharSheet;
+            KeyMap[ConsoleKey.F]          = TuiAction.ToggleAutoAttack;
+            KeyMap[ConsoleKey.T]          = TuiAction.TargetNearest;
         }
 
         public override void ReadXml(XmlDocument Document)

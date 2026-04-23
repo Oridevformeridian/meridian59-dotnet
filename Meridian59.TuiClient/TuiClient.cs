@@ -84,6 +84,11 @@ namespace Meridian59.TuiClient
         private bool popupJustClosed = false;
         private CharTab charTab = CharTab.Stats;
         private int charScrollOffset = 0;
+        private int charSelectionIndex = 0;
+
+        // Combat state
+        private bool autoAttack = false;
+        private int lastAvatarHP = -1;
 
         // Composition State
         private string composeRecipient = "";
@@ -233,6 +238,27 @@ namespace Meridian59.TuiClient
             if (Data.UIMode == UIMode.Playing && gameModeSince == DateTime.MinValue)
             {
                 gameModeSince = DateTime.Now;
+            }
+
+            // Combat tick — runs regardless of TTY
+            if (autoAttack)
+            {
+                var attackTarget = Data.TargetObject as RoomObject;
+                if (attackTarget != null)
+                {
+                    FaceTarget(attackTarget);
+                    SendReqAttackMessage(attackTarget);
+                }
+
+                // Auto-target nearest hostile when we take damage with no target
+                int currentHP = (int)(Data.AvatarCondition.GetItemByNum(1)?.ValueCurrent ?? -1);
+                if (lastAvatarHP >= 0 && currentHP >= 0 && currentHP < lastAvatarHP && Data.TargetObject == null)
+                    AutoTargetNearest();
+                if (currentHP >= 0) lastAvatarHP = currentHP;
+            }
+            else
+            {
+                lastAvatarHP = (int)(Data.AvatarCondition.GetItemByNum(1)?.ValueCurrent ?? -1);
             }
 
             // UI rendering only when TTY is available
@@ -598,7 +624,7 @@ namespace Meridian59.TuiClient
 
                 // Hint bar at h-1
                 Console.SetCursorPosition(0, h - 1);
-                string hints = " [Enter]Chat  [WASD]Move  [C]harSheet  [R]un  [F5]Refresh  [+/-]Zoom  [Q]uit";
+                string hints = " [Enter]Chat [WASD]Move [C]harSheet [F]ight [T]arget [R]un [+/-]Zoom [Q]uit";
                 Console.Write(SafeLine("╚" + hints.PadRight(78, '═') + "╝", w - 1));
 
                 DrawStats();
@@ -652,6 +678,17 @@ namespace Meridian59.TuiClient
 
                 Console.SetCursorPosition(32, 3);
                 Console.Write($"$:{cash,-5}");
+
+                // Combat status (row 2, cols 17-57)
+                string tgtName = Data.TargetObject?.Name ?? "";
+                string atkStr = autoAttack ? "[ATK:ON ] " : "[ATK:OFF] ";
+                string combatLine = tgtName.Length > 0
+                    ? atkStr + "TGT:" + (tgtName.Length > 27 ? tgtName[..24] + "..." : tgtName)
+                    : atkStr;
+                Console.SetCursorPosition(17, 2);
+                Console.ForegroundColor = autoAttack ? ConsoleColor.Red : ConsoleColor.DarkGray;
+                Console.Write(combatLine.PadRight(41));
+                Console.ResetColor();
             }
         }
 
@@ -878,7 +915,48 @@ namespace Meridian59.TuiClient
                 && !m.Sender.Equals("none", StringComparison.OrdinalIgnoreCase)).ToList();
         }
 
-        // ── Character Sheet ──────────────────────────────────────────────────────
+        // ── Combat ───────────────────────────────────────────────────────────────
+
+        private void FaceTarget(RoomObject target)
+        {
+            var avatar = Data.AvatarObject;
+            if (avatar == null || target == null) return;
+            float dx = target.CoordinateX - avatar.CoordinateX;
+            float dz = target.CoordinateY - avatar.CoordinateY;
+            // M59 angle: 0=E, 1024=S, 2048=W, 3072=N (4096 units/circle)
+            ushort angle = (ushort)(((float)Math.Atan2(dz, dx) / (2 * MathF.PI) * 4096 + 4096) % 4096);
+            if (avatar.AngleUnits != angle)
+            {
+                avatar.AngleUnits = angle;
+                SendReqTurnMessage(true);
+            }
+        }
+
+        private void AutoTargetNearest()
+        {
+            var avatar = Data.AvatarObject;
+            if (avatar == null) return;
+            RoomObject nearest = null;
+            float minDist = float.MaxValue;
+            foreach (var obj in Data.RoomObjects.ToList())
+            {
+                if (obj.IsAvatar) continue;
+                if (!obj.Flags.IsCreature && !obj.Flags.IsAttackable) continue;
+                float dx = obj.CoordinateX - avatar.CoordinateX;
+                float dz = obj.CoordinateY - avatar.CoordinateY;
+                float d = dx * dx + dz * dz;
+                if (d < minDist) { minDist = d; nearest = obj; }
+            }
+            if (nearest != null)
+            {
+                Data.TargetID = nearest.ID;
+                FaceTarget(nearest);
+                Log("SYS", $"Auto-targeted: {nearest.Name}");
+                DrawStats();
+            }
+        }
+
+        // ── Character Sheet ───────────────────────────────────────────────────────
 
         private void RenderScrollableRows(List<(string text, ConsoleColor color)> rows,
             int contentX, int contentY, int contentW, int contentH)
@@ -935,53 +1013,101 @@ namespace Meridian59.TuiClient
 
         private void DrawCharSpells(int contentX, int contentY, int contentW, int contentH)
         {
-            var rows = new List<(string, ConsoleColor)>();
             var schoolOrder = new[] {
                 SchoolType.Shalille, SchoolType.Qor, SchoolType.Kraanan,
                 SchoolType.Faren, SchoolType.Riija, SchoolType.Jala, SchoolType.WeaponCraft
             };
-
             var spellLookup = new Dictionary<uint, SchoolType>();
             foreach (var so in Data.SpellObjects.ToList())
                 spellLookup[so.ID] = so.SchoolType;
 
             var spells = Data.AvatarSpells.ToList()
-                .Select(s => (spell: s,
-                              school: spellLookup.TryGetValue(s.ObjectID, out var sc) ? sc : (SchoolType)0))
+                .Select(s => (spell: s, school: spellLookup.TryGetValue(s.ObjectID, out var sc) ? sc : (SchoolType)0))
                 .OrderBy(x => { int i = Array.IndexOf(schoolOrder, x.school); return i < 0 ? 99 : i; })
                 .ThenBy(x => x.spell.ResourceName)
                 .ToList();
 
+            charSelectionIndex = Math.Clamp(charSelectionIndex, 0, Math.Max(0, spells.Count - 1));
+
+            // Build display rows, recording which display row each spell lands on
+            var rows = new List<(string text, ConsoleColor color)>();
+            var spellDisplayRow = new List<int>(); // display row index for each spell
             SchoolType lastSchool = (SchoolType)255;
             foreach (var (spell, school) in spells)
             {
                 if (school != lastSchool)
                 {
-                    string schoolName = school == 0 ? "Unknown" : school.ToString();
-                    string sep = $"─── {schoolName} " + new string('─', Math.Max(0, contentW - schoolName.Length - 5));
-                    rows.Add((sep, ConsoleColor.DarkCyan));
+                    string sn = school == 0 ? "Unknown" : school.ToString();
+                    rows.Add(($"─── {sn} " + new string('─', Math.Max(0, contentW - sn.Length - 5)), ConsoleColor.DarkCyan));
                     lastSchool = school;
                 }
+                spellDisplayRow.Add(rows.Count);
                 rows.Add(($"  ✓ {spell.ResourceName}", ConsoleColor.Gray));
             }
-            if (rows.Count == 0)
-                rows.Add(("  (No spells)", ConsoleColor.DarkGray));
-            RenderScrollableRows(rows, contentX, contentY, contentW, contentH);
+            if (rows.Count == 0) { rows.Add(("  (No spells)", ConsoleColor.DarkGray)); RenderScrollableRows(rows, contentX, contentY, contentW, contentH); return; }
+
+            int selectedDisplay = spells.Count > 0 ? spellDisplayRow[charSelectionIndex] : -1;
+
+            // Scroll to keep selection visible
+            if (selectedDisplay >= 0)
+            {
+                if (selectedDisplay < charScrollOffset) charScrollOffset = selectedDisplay;
+                else if (selectedDisplay >= charScrollOffset + contentH) charScrollOffset = selectedDisplay - contentH + 1;
+            }
+            charScrollOffset = Math.Clamp(charScrollOffset, 0, Math.Max(0, rows.Count - contentH));
+
+            for (int i = 0; i < contentH; i++)
+            {
+                int idx = i + charScrollOffset;
+                Console.SetCursorPosition(contentX, contentY + i);
+                if (idx < rows.Count)
+                {
+                    bool sel = idx == selectedDisplay;
+                    Console.ForegroundColor = sel ? ConsoleColor.Black : rows[idx].color;
+                    Console.BackgroundColor = sel ? ConsoleColor.Gray  : ConsoleColor.Black;
+                    Console.Write(SafeLine(rows[idx].text.PadRight(contentW), contentW));
+                    Console.ResetColor();
+                }
+                else Console.Write(new string(' ', contentW));
+            }
         }
 
         private void DrawCharInventory(int contentX, int contentY, int contentW, int contentH)
         {
-            var rows = new List<(string, ConsoleColor)>();
-            foreach (var obj in Data.InventoryObjects.ToList().OrderBy(o => o.Name))
+            var items = Data.InventoryObjects.ToList().OrderBy(o => o.Name).ToList();
+            charSelectionIndex = Math.Clamp(charSelectionIndex, 0, Math.Max(0, items.Count - 1));
+
+            var rows = new List<(string text, ConsoleColor color)>();
+            foreach (var obj in items)
             {
+                bool equipped = obj.Flags.IsEquipped;
+                string suffix = equipped ? " [E]" : "";
                 string line = obj.Count > 0
-                    ? $"{obj.Name,-32} x{obj.Count,4}"
-                    : $"{obj.Name}";
-                rows.Add((line, ConsoleColor.Gray));
+                    ? $"{obj.Name,-28} x{obj.Count,4}{suffix}"
+                    : $"{obj.Name}{suffix}";
+                rows.Add((line, equipped ? ConsoleColor.Yellow : ConsoleColor.Gray));
             }
-            if (rows.Count == 0)
-                rows.Add(("  (Empty)", ConsoleColor.DarkGray));
-            RenderScrollableRows(rows, contentX, contentY, contentW, contentH);
+            if (rows.Count == 0) { rows.Add(("  (Empty)", ConsoleColor.DarkGray)); RenderScrollableRows(rows, contentX, contentY, contentW, contentH); return; }
+
+            // Scroll to keep selection visible
+            if (charSelectionIndex < charScrollOffset) charScrollOffset = charSelectionIndex;
+            else if (charSelectionIndex >= charScrollOffset + contentH) charScrollOffset = charSelectionIndex - contentH + 1;
+            charScrollOffset = Math.Clamp(charScrollOffset, 0, Math.Max(0, rows.Count - contentH));
+
+            for (int i = 0; i < contentH; i++)
+            {
+                int idx = i + charScrollOffset;
+                Console.SetCursorPosition(contentX, contentY + i);
+                if (idx < rows.Count)
+                {
+                    bool sel = idx == charSelectionIndex;
+                    Console.ForegroundColor = sel ? ConsoleColor.Black : rows[idx].color;
+                    Console.BackgroundColor = sel ? ConsoleColor.Gray  : ConsoleColor.Black;
+                    Console.Write(SafeLine(rows[idx].text.PadRight(contentW), contentW));
+                    Console.ResetColor();
+                }
+                else Console.Write(new string(' ', contentW));
+            }
         }
 
         private void DrawCharSheet(int startX, int startY, int width, int height)
@@ -1005,7 +1131,9 @@ namespace Meridian59.TuiClient
             }
 
             // Bottom border with centred footer hint
-            string footerText = " [Esc:Close] [←/→:Tab] [↑↓:Scroll] ";
+            string footerText = charTab == CharTab.Spells   ? " [Esc:Close] [←/→:Tab] [↑↓:Select] [Enter:Cast] " :
+                                charTab == CharTab.Inventory ? " [Esc:Close] [←/→:Tab] [↑↓:Select] [Enter:Use] " :
+                                                               " [Esc:Close] [←/→:Tab] [↑↓:Scroll] ";
             if (footerText.Length > width - 4) footerText = footerText[..(width - 4)];
             int flPad = (width - 2 - footerText.Length) / 2;
             int frPad = width - 2 - footerText.Length - flPad;
@@ -1207,6 +1335,7 @@ namespace Meridian59.TuiClient
             if (activePopup == PopupMode.CharSheet)
             {
                 int pageSize = Math.Max(1, Console.WindowHeight - 13);
+                bool selectable = charTab == CharTab.Spells || charTab == CharTab.Inventory;
                 switch (key.Key)
                 {
                     case ConsoleKey.Escape:
@@ -1218,28 +1347,76 @@ namespace Meridian59.TuiClient
                     case ConsoleKey.LeftArrow:
                         charTab = (CharTab)Math.Max(0, (int)charTab - 1);
                         charScrollOffset = 0;
+                        charSelectionIndex = 0;
                         DrawMap();
                         break;
                     case ConsoleKey.RightArrow:
                         charTab = (CharTab)Math.Min(3, (int)charTab + 1);
                         charScrollOffset = 0;
+                        charSelectionIndex = 0;
                         DrawMap();
                         break;
                     case ConsoleKey.UpArrow:
-                        charScrollOffset = Math.Max(0, charScrollOffset - 1);
+                        if (selectable) charSelectionIndex = Math.Max(0, charSelectionIndex - 1);
+                        else charScrollOffset = Math.Max(0, charScrollOffset - 1);
                         DrawMap();
                         break;
                     case ConsoleKey.DownArrow:
-                        charScrollOffset++;
+                        if (selectable) charSelectionIndex++;
+                        else charScrollOffset++;
                         DrawMap();
                         break;
                     case ConsoleKey.PageUp:
-                        charScrollOffset = Math.Max(0, charScrollOffset - pageSize);
+                        if (selectable) charSelectionIndex = Math.Max(0, charSelectionIndex - pageSize);
+                        else charScrollOffset = Math.Max(0, charScrollOffset - pageSize);
                         DrawMap();
                         break;
                     case ConsoleKey.PageDown:
-                        charScrollOffset += pageSize;
+                        if (selectable) charSelectionIndex += pageSize;
+                        else charScrollOffset += pageSize;
                         DrawMap();
+                        break;
+                    case ConsoleKey.Enter:
+                        if (charTab == CharTab.Spells)
+                        {
+                            var schoolOrder = new[] {
+                                SchoolType.Shalille, SchoolType.Qor, SchoolType.Kraanan,
+                                SchoolType.Faren, SchoolType.Riija, SchoolType.Jala, SchoolType.WeaponCraft
+                            };
+                            var spellLookup = new Dictionary<uint, SchoolType>();
+                            foreach (var so in Data.SpellObjects.ToList()) spellLookup[so.ID] = so.SchoolType;
+                            var spells = Data.AvatarSpells.ToList()
+                                .Select(s => (spell: s, school: spellLookup.TryGetValue(s.ObjectID, out var sc) ? sc : (SchoolType)0))
+                                .OrderBy(x => { int i = Array.IndexOf(schoolOrder, x.school); return i < 0 ? 99 : i; })
+                                .ThenBy(x => x.spell.ResourceName)
+                                .ToList();
+                            int si = Math.Clamp(charSelectionIndex, 0, spells.Count - 1);
+                            if (spells.Count > 0)
+                            {
+                                SendReqCastMessage(spells[si].spell.ObjectID);
+                                Log("SYS", $"Casting: {spells[si].spell.ResourceName}");
+                            }
+                        }
+                        else if (charTab == CharTab.Inventory)
+                        {
+                            var items = Data.InventoryObjects.ToList().OrderBy(o => o.Name).ToList();
+                            int ii = Math.Clamp(charSelectionIndex, 0, items.Count - 1);
+                            if (items.Count > 0)
+                            {
+                                var item = items[ii];
+                                if (item.Flags.IsEquipped)
+                                {
+                                    SendReqUnuseMessage(item.ID);
+                                    Log("SYS", $"Unequipping: {item.Name}");
+                                }
+                                else
+                                {
+                                    SendReqUseMessage(item.ID);
+                                    Log("SYS", $"Using/equipping: {item.Name}");
+                                }
+                                DrawMap();
+                            }
+                        }
                         break;
                 }
                 return;
@@ -1659,6 +1836,16 @@ namespace Meridian59.TuiClient
                 case TuiAction.ToggleNetTab:
                     activeTab = (activeTab == LogTab.Chat) ? LogTab.Network : LogTab.Chat;
                     DrawLog();
+                    break;
+
+                case TuiAction.ToggleAutoAttack:
+                    autoAttack = !autoAttack;
+                    Log("SYS", "Auto-attack: " + (autoAttack ? "ON" : "OFF"));
+                    DrawStats();
+                    break;
+
+                case TuiAction.TargetNearest:
+                    AutoTargetNearest();
                     break;
             }
         }
