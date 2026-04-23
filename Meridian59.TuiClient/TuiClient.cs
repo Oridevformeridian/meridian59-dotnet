@@ -663,33 +663,19 @@ namespace Meridian59.TuiClient
 
             lock (consoleLock)
             {
-                // Room Name (starts col 17, max 18 chars)
+                // Room Name: fills cols 17-57 (between the ╦ borders at 15 and 59)
                 Console.SetCursorPosition(17, 1);
                 Console.ForegroundColor = ConsoleColor.White;
                 string roomName = ri?.RoomName ?? "Unknown Room";
-                if (roomName.Length > 18) roomName = roomName[..15] + "...";
-                Console.Write($"{roomName,-18}");
+                if (roomName.Length > 41) roomName = roomName[..38] + "...";
+                Console.Write($"{roomName,-41}");
+
+                // Clear right section cols 60-78 (formerly held Tile overflow)
+                Console.SetCursorPosition(60, 1);
+                Console.ForegroundColor = ConsoleColor.Gray;
+                Console.Write(new string(' ', 19));
+
                 Console.ResetColor();
-
-                if (avatar != null)
-                {
-                    // Coordinates (starts col 37, max 15 chars)
-                    Console.SetCursorPosition(37, 1);
-                    Console.Write($"X:{avatar.CoordinateX,4} Y:{avatar.CoordinateY,4}");
-
-                    // Tile (starts col 55). Standard M59: Tile = position3D - 64.0
-                    // PadRight(24) fills exactly to col 78, clearing any residual content.
-                    float tileCol = ((float)avatar.Position3D.X - 64.0f);
-                    float tileRow = ((float)avatar.Position3D.Z - 64.0f);
-                    Console.SetCursorPosition(55, 1);
-                    Console.Write($"Tile:{tileCol,4:F1},{tileRow,4:F1}".PadRight(24));
-                }
-                else
-                {
-                    // Clear coords + tile area when no avatar
-                    Console.SetCursorPosition(37, 1);
-                    Console.Write(new string(' ', 42));
-                }
             }
         }
 
@@ -831,12 +817,31 @@ namespace Meridian59.TuiClient
                 Console.SetCursorPosition(79, 1);
                 Console.Write("║ ║");
 
-                // Draw Map Header in the gap above startY
+                // Draw Map Header: MapStatus on the left, X/Y/Tile right-aligned
                 Console.SetCursorPosition(startX, 1);
-                string mapHeader = renderer.MapStatus;
-                if (mapHeader.Length > width - 1) mapHeader = mapHeader[..(width - 1)];
+                var mapAvatar = Data.AvatarObject;
+                string coordStr = "";
+                if (mapAvatar != null)
+                {
+                    float tileCol = mapAvatar.Position3D.X - 64.0f;
+                    float tileRow = mapAvatar.Position3D.Z - 64.0f;
+                    coordStr = $" X:{mapAvatar.CoordinateX,4} Y:{mapAvatar.CoordinateY,4}  Tile:{tileCol,4:F1},{tileRow,4:F1}";
+                }
+                int availW = width - 1;
+                string mapStatus = renderer.MapStatus;
+                string headerLine;
+                if (coordStr.Length == 0 || availW <= coordStr.Length)
+                {
+                    headerLine = mapStatus.Length > availW ? mapStatus[..availW] : mapStatus.PadRight(availW);
+                }
+                else
+                {
+                    int leftW = availW - coordStr.Length;
+                    string leftPart = mapStatus.Length > leftW ? mapStatus[..leftW] : mapStatus.PadRight(leftW);
+                    headerLine = leftPart + coordStr;
+                }
                 Console.ForegroundColor = ConsoleColor.Cyan;
-                Console.Write(mapHeader.PadRight(width - 1));
+                Console.Write(headerLine);
                 Console.ResetColor();
 
                 if (activePopup != PopupMode.None)
