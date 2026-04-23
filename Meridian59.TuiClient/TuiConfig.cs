@@ -12,10 +12,6 @@ namespace Meridian59.TuiClient
         MoveDown,
         MoveRight,
         MoveLeft,
-        MoveUpLeft,
-        MoveUpRight,
-        MoveDownLeft,
-        MoveDownRight,
         Hotkey1,
         Hotkey2,
         Hotkey3,
@@ -57,26 +53,12 @@ namespace Meridian59.TuiClient
             KeyMap[ConsoleKey.DownArrow]  = TuiAction.MoveDown;
             KeyMap[ConsoleKey.LeftArrow]  = TuiAction.MoveLeft;
             KeyMap[ConsoleKey.RightArrow] = TuiAction.MoveRight;
-            // 8-directional QWEASDZX layout
             KeyMap[ConsoleKey.W]          = TuiAction.MoveUp;
             KeyMap[ConsoleKey.S]          = TuiAction.MoveDown;
             KeyMap[ConsoleKey.A]          = TuiAction.MoveLeft;
             KeyMap[ConsoleKey.D]          = TuiAction.MoveRight;
-            KeyMap[ConsoleKey.Q]          = TuiAction.MoveUpLeft;
-            KeyMap[ConsoleKey.E]          = TuiAction.MoveUpRight;
-            KeyMap[ConsoleKey.Z]          = TuiAction.MoveDownLeft;
-            KeyMap[ConsoleKey.X]          = TuiAction.MoveDownRight;
-            // Numpad 8-directional
-            KeyMap[ConsoleKey.NumPad8]    = TuiAction.MoveUp;
-            KeyMap[ConsoleKey.NumPad2]    = TuiAction.MoveDown;
-            KeyMap[ConsoleKey.NumPad4]    = TuiAction.MoveLeft;
-            KeyMap[ConsoleKey.NumPad6]    = TuiAction.MoveRight;
-            KeyMap[ConsoleKey.NumPad7]    = TuiAction.MoveUpLeft;
-            KeyMap[ConsoleKey.NumPad9]    = TuiAction.MoveUpRight;
-            KeyMap[ConsoleKey.NumPad1]    = TuiAction.MoveDownLeft;
-            KeyMap[ConsoleKey.NumPad3]    = TuiAction.MoveDownRight;
             KeyMap[ConsoleKey.Spacebar]   = TuiAction.Use;
-            KeyMap[ConsoleKey.Escape]     = TuiAction.Quit;
+            KeyMap[ConsoleKey.Q]          = TuiAction.Quit;
             KeyMap[ConsoleKey.Add]        = TuiAction.ZoomIn;
             KeyMap[ConsoleKey.OemPlus]    = TuiAction.ZoomIn;
             KeyMap[ConsoleKey.Subtract]   = TuiAction.ZoomOut;
