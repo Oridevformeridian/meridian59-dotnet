@@ -847,18 +847,7 @@ namespace Meridian59.TuiClient
                 {
                     if (popupJustClosed)
                     {
-                        // Clear popup frame leftovers
-                        Console.SetCursorPosition(startX, startY);
-                        Console.Write(new string(' ', width));
-                        Console.SetCursorPosition(startX, startY + height - 1);
-                        Console.Write(new string(' ', width));
-                        for (int i = 1; i < height - 1; i++)
-                        {
-                            Console.SetCursorPosition(startX, startY + i);
-                            Console.Write(" ");
-                            Console.SetCursorPosition(startX + width - 1, startY + i);
-                            Console.Write(" ");
-                        }
+                        renderer.Invalidate();
                         popupJustClosed = false;
                     }
                     renderer.Render(this, startX + 1, startY + 1, width - 2, height - 2);
