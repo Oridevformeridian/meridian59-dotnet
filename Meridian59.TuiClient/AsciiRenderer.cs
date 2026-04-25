@@ -246,8 +246,17 @@ namespace Meridian59.TuiClient
                 ConsoleColor currentBgColor = ConsoleColor.Black;
                 Console.ForegroundColor = currentColor;
                 Console.BackgroundColor = currentBgColor;
+
+                var runBuf = new System.Text.StringBuilder(width);
+
                 for (int y = 0; y < height; y++)
                 {
+                    // Batch consecutive changed cells on the same row that share the same color.
+                    int runStartX   = -1;
+                    ConsoleColor runFg = ConsoleColor.Gray;
+                    ConsoleColor runBg = ConsoleColor.Black;
+                    runBuf.Clear();
+
                     for (int x = 0; x < width; x++)
                     {
                         var next = nextBuffer.Cells[x, y];
@@ -257,24 +266,53 @@ namespace Meridian59.TuiClient
                         bool charChanged  = displayChar != curr.Char;
                         bool colorChanged = displayChar != ' ' && next.Color != curr.Color;
                         bool bgChanged    = next.BgColor != curr.BgColor;
-                        if (charChanged || colorChanged || bgChanged)
+                        bool needsWrite   = charChanged || colorChanged || bgChanged;
+
+                        if (needsWrite && runStartX >= 0 &&
+                            (next.Color != runFg || next.BgColor != runBg))
                         {
-                            if (next.Color != currentColor)
+                            // Flush current run — color break
+                            if (runFg != currentColor)   { Console.ForegroundColor = runFg; currentColor   = runFg; }
+                            if (runBg != currentBgColor) { Console.BackgroundColor = runBg; currentBgColor = runBg; }
+                            Console.SetCursorPosition(consoleX + runStartX, consoleY + y);
+                            Console.Write(runBuf.ToString());
+                            runBuf.Clear();
+                            runStartX = -1;
+                        }
+
+                        if (needsWrite)
+                        {
+                            if (runStartX < 0)
                             {
-                                Console.ForegroundColor = next.Color;
-                                currentColor = next.Color;
+                                runStartX = x;
+                                runFg     = next.Color;
+                                runBg     = next.BgColor;
                             }
-                            if (next.BgColor != currentBgColor)
-                            {
-                                Console.BackgroundColor = next.BgColor;
-                                currentBgColor = next.BgColor;
-                            }
-                            Console.SetCursorPosition(consoleX + x, consoleY + y);
-                            Console.Write(displayChar);
+                            runBuf.Append(displayChar);
                             currentBuffer.Cells[x, y].Char    = displayChar;
                             currentBuffer.Cells[x, y].Color   = next.Color;
                             currentBuffer.Cells[x, y].BgColor = next.BgColor;
                         }
+                        else if (runStartX >= 0)
+                        {
+                            // Gap in changed cells — flush run
+                            if (runFg != currentColor)   { Console.ForegroundColor = runFg; currentColor   = runFg; }
+                            if (runBg != currentBgColor) { Console.BackgroundColor = runBg; currentBgColor = runBg; }
+                            Console.SetCursorPosition(consoleX + runStartX, consoleY + y);
+                            Console.Write(runBuf.ToString());
+                            runBuf.Clear();
+                            runStartX = -1;
+                        }
+                    }
+
+                    // Flush any remaining run at end of row
+                    if (runStartX >= 0)
+                    {
+                        if (runFg != currentColor)   { Console.ForegroundColor = runFg; currentColor   = runFg; }
+                        if (runBg != currentBgColor) { Console.BackgroundColor = runBg; currentBgColor = runBg; }
+                        Console.SetCursorPosition(consoleX + runStartX, consoleY + y);
+                        Console.Write(runBuf.ToString());
+                        runBuf.Clear();
                     }
                 }
                 Console.ResetColor();
@@ -287,18 +325,20 @@ namespace Meridian59.TuiClient
 
         private void ApplyLighting(VideoBuffer buffer, int originX, int originY)
         {
-            float maxDist = Math.Min(buffer.Width, buffer.Height) * 0.8f;
+            float maxDist    = Math.Min(buffer.Width, buffer.Height) * 0.8f;
+            float maxDistSq  = maxDist * maxDist;
 
             for (int y = 0; y < buffer.Height; y++)
             {
+                float dy = y - originY;
+                float dySq = dy * dy;
                 for (int x = 0; x < buffer.Width; x++)
                 {
-                    float dx = x - originX;
-                    float dy = y - originY;
-                    float dist = MathF.Sqrt(dx * dx + dy * dy);
-                    float intensity = Math.Clamp(1.0f - (dist / maxDist), 0.1f, 1.0f);
+                    float dx    = x - originX;
+                    float distSq = dx * dx + dySq;
+                    float intensity = Math.Clamp(1.0f - MathF.Sqrt(distSq) / maxDist, 0.1f, 1.0f);
 
-                    if (dist > 1.0f)
+                    if (distSq > 1.0f)
                     {
                         float angle = MathF.Atan2(-dy, dx);
                         float targetScreenAngle = -avatarAngle;
