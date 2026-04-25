@@ -655,10 +655,19 @@ namespace Meridian59.TuiClient
                     Console.Clear();
                     DrawTuiLayout();
                 }
-                DrawStats();
-                DrawRoomInfo();
-                DrawBuffs();
-                DrawMap();
+                if (activePopup == PopupMode.None)
+                {
+                    DrawStats();
+                    DrawRoomInfo();
+                    DrawBuffs();
+                    DrawMap();
+                }
+                else
+                {
+                    // Popup is active — only redraw the map panel (which renders the popup).
+                    // Skip stats/buffs/roominfo; they're behind the popup and don't need updating.
+                    DrawMap();
+                }
                 DrawInputField();
             }
         }
@@ -1678,6 +1687,12 @@ namespace Meridian59.TuiClient
 
             lock (consoleLock)
             {
+                if (activePopup != PopupMode.None)
+                {
+                    DrawPopup(startX, startY, width, height);
+                    return;
+                }
+
                 // Ensure the panel separator at col 79, row 1 is intact before we write MapStatus next to it
                 Console.SetCursorPosition(79, 1);
                 Console.Write("║ ║");
@@ -1710,36 +1725,28 @@ namespace Meridian59.TuiClient
                 Console.Write(statusRight);
                 Console.ResetColor();
 
-                if (activePopup != PopupMode.None)
+                if (popupJustClosed)
                 {
-                    DrawPopup(startX, startY, width, height);
-                }
-                else
-                {
-                    if (popupJustClosed)
+                    // Blank the entire console so no popup remnants survive in any panel.
+                    Console.BackgroundColor = ConsoleColor.Black;
+                    Console.ForegroundColor = ConsoleColor.Gray;
+                    string blankLine = new string(' ', Console.WindowWidth);
+                    for (int row = 0; row < Console.WindowHeight - 1; row++)
                     {
-                        // Blank the entire console so no popup remnants survive in any panel.
-                        // Then force a full redraw of every panel.
-                        Console.BackgroundColor = ConsoleColor.Black;
-                        Console.ForegroundColor = ConsoleColor.Gray;
-                        string blankLine = new string(' ', Console.WindowWidth);
-                        for (int row = 0; row < Console.WindowHeight - 1; row++)
-                        {
-                            Console.SetCursorPosition(0, row);
-                            Console.Write(blankLine);
-                        }
-                        renderer.Invalidate();
-                        popupJustClosed = false;
-
-                        // Repaint all panels
-                        DrawChrome();
-                        DrawStats();
-                        DrawRoomInfo();
-                        DrawBuffs();
-                        DrawLog();
+                        Console.SetCursorPosition(0, row);
+                        Console.Write(blankLine);
                     }
-                    renderer.Render(this, startX + 1, startY + 1, width - 2, height - 2);
+                    renderer.Invalidate();
+                    popupJustClosed = false;
+
+                    // Repaint all panels
+                    DrawChrome();
+                    DrawStats();
+                    DrawRoomInfo();
+                    DrawBuffs();
+                    DrawLog();
                 }
+                renderer.Render(this, startX + 1, startY + 1, width - 2, height - 2);
 
                 if (showWhoList) DrawWhoList();
             }
@@ -2188,7 +2195,7 @@ namespace Meridian59.TuiClient
             int dlgW = Math.Min(50, w - 4);
             int dlgH = 9;
             int dlgX = (w - dlgW) / 2;
-            int dlgY = (h - dlgH) / 2;
+            int dlgY = Math.Max(5, (h - dlgH) / 2);
 
             Console.SetCursorPosition(dlgX, dlgY);
             Console.ForegroundColor = ConsoleColor.Cyan;
@@ -2239,7 +2246,7 @@ namespace Meridian59.TuiClient
             int dlgW = Math.Min(64, Console.WindowWidth - 4);
             int dlgH = Math.Min(items.Count + 9, Console.WindowHeight - 4);
             int dlgX = (Console.WindowWidth - dlgW) / 2;
-            int dlgY = Math.Max(1, (Console.WindowHeight - dlgH) / 2);
+            int dlgY = Math.Max(5, (Console.WindowHeight - dlgH) / 2);
 
             buySelectedIndex = Math.Clamp(buySelectedIndex, 0, Math.Max(0, items.Count - 1));
 
@@ -2322,7 +2329,7 @@ namespace Meridian59.TuiClient
             int dlgW = Math.Min(64, Console.WindowWidth - 4);
             int dlgH = Math.Min(Console.WindowHeight - 4, 24);
             int dlgX = (Console.WindowWidth - dlgW) / 2;
-            int dlgY = Math.Max(1, (Console.WindowHeight - dlgH) / 2);
+            int dlgY = Math.Max(5, (Console.WindowHeight - dlgH) / 2);
 
             offerSelectedIndex = Math.Clamp(offerSelectedIndex, 0, Math.Max(0, inventory.Count - 1));
 
@@ -2411,7 +2418,7 @@ namespace Meridian59.TuiClient
             int dlgW = Math.Min(60, Console.WindowWidth - 4);
             int dlgH = Math.Min(items.Count + 8, Console.WindowHeight - 4);
             int dlgX = (Console.WindowWidth - dlgW) / 2;
-            int dlgY = Math.Max(1, (Console.WindowHeight - dlgH) / 2);
+            int dlgY = Math.Max(5, (Console.WindowHeight - dlgH) / 2);
 
             spellTargetSelectedIndex = Math.Clamp(spellTargetSelectedIndex, 0, Math.Max(0, items.Count - 1));
 
@@ -2481,7 +2488,7 @@ namespace Meridian59.TuiClient
             int dlgW = Math.Min(50, Console.WindowWidth - 4);
             int dlgH = Math.Min(candidates.Count + 6, Console.WindowHeight - 4);
             int dlgX = (Console.WindowWidth - dlgW) / 2;
-            int dlgY = Math.Max(1, (Console.WindowHeight - dlgH) / 2);
+            int dlgY = Math.Max(5, (Console.WindowHeight - dlgH) / 2);
             lookSelectedIndex = Math.Clamp(lookSelectedIndex, 0, Math.Max(0, candidates.Count - 1));
 
             Console.ForegroundColor = ConsoleColor.Cyan;
@@ -2529,7 +2536,7 @@ namespace Meridian59.TuiClient
             int dlgW = Math.Min(52, Console.WindowWidth - 4);
             int dlgH = Math.Min(candidates.Count + 7, Console.WindowHeight - 4);
             int dlgX = (Console.WindowWidth - dlgW) / 2;
-            int dlgY = Math.Max(1, (Console.WindowHeight - dlgH) / 2);
+            int dlgY = Math.Max(5, (Console.WindowHeight - dlgH) / 2);
             getSelectedIndex = Math.Clamp(getSelectedIndex, 0, Math.Max(0, candidates.Count - 1));
 
             Console.ForegroundColor = ConsoleColor.Yellow;
@@ -2595,7 +2602,7 @@ namespace Meridian59.TuiClient
 
             // Use the left text panel area (cols 0..79, rows 1..height-3)
             int dlgX = 1;
-            int dlgY = 1;
+            int dlgY = 5;
             int dlgW = Math.Min(78, Console.WindowWidth - 2);
             int dlgH = Console.WindowHeight - 3;
 
@@ -2657,7 +2664,7 @@ namespace Meridian59.TuiClient
             int dlgW = Math.Min(60, Console.WindowWidth - 4);
             int dlgH = Math.Min(charSelectList.Count + 7, Console.WindowHeight - 4);
             int dlgX = (Console.WindowWidth  - dlgW) / 2;
-            int dlgY = (Console.WindowHeight - dlgH) / 2;
+            int dlgY = Math.Max(5, (Console.WindowHeight - dlgH) / 2);
 
             Console.ForegroundColor = ConsoleColor.Cyan;
             Console.SetCursorPosition(dlgX, dlgY);
@@ -2835,7 +2842,7 @@ namespace Meridian59.TuiClient
             int dlgW = Math.Min(72, Console.WindowWidth - 4);
             int dlgH = Math.Min(26, Console.WindowHeight - 4);
             int dlgX = (Console.WindowWidth  - dlgW) / 2;
-            int dlgY = Math.Max(1, (Console.WindowHeight - dlgH) / 2);
+            int dlgY = Math.Max(5, (Console.WindowHeight - dlgH) / 2);
 
             bool isConfirm = (activePopup == PopupMode.StatChangeConfirm);
 
@@ -3050,7 +3057,7 @@ namespace Meridian59.TuiClient
             int dlgW = Math.Min(70, Console.WindowWidth - 4);
             int dlgH = Console.WindowHeight - 4;
             int dlgX = (Console.WindowWidth  - dlgW) / 2;
-            int dlgY = 2;
+            int dlgY = 5;
 
             Console.ForegroundColor = ConsoleColor.Cyan;
             Console.SetCursorPosition(dlgX, dlgY);
