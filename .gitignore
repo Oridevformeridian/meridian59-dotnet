@@ -59,3 +59,16 @@
 /Meridian59.BgfService/Bin
 /Meridian59.Brain
 PLAN.md
+
+# Root-level build output
+/bin/
+/obj/
+
+# Misc root artifacts
+*.rsb
+*.script
+RoomInfoDumper.cs
+RoomInfoDumper.csproj
+dump_roo_header.py
+find_id_in_rsc.py
+merge_rsc.py
