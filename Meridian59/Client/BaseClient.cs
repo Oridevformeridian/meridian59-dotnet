@@ -482,6 +482,10 @@ namespace Meridian59.Client
                     HandleSaidMessage((SaidMessage)Message);
                     break;
 
+                case MessageTypeGameMode.LookupNames:                      // 190
+                    HandleLookupNamesMessage((LookupNamesMessage)Message);
+                    break;
+
                 case MessageTypeGameMode.Admin:                             // 162
                     HandleAdminMessage((AdminMessage)Message);
                     break;

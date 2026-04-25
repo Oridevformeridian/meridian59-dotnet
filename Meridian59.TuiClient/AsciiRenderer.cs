@@ -14,9 +14,10 @@ namespace Meridian59.TuiClient
         private VideoBuffer nextBuffer;
         private int lastWidth;
         private int lastHeight;
+        private volatile bool invalidatePending = false;
 
         // zoomLevel=0 → fits entire room in viewport; positive = zoom in, negative = zoom out.
-        private int zoomLevel = 0;
+        private int zoomLevel = -2;
         private const int ZOOM_MAX = 7;
         private const int ZOOM_MIN = -2;
 
@@ -35,9 +36,12 @@ namespace Meridian59.TuiClient
 
         public void Invalidate()
         {
-            currentBuffer = null;
-            nextBuffer    = null;
-            lastRoomId    = 0;
+            // Set a flag instead of nulling buffers directly — Render() runs on a different
+            // thread and nulling here races with the diff-render loop, causing a
+            // NullReferenceException that is silently caught, leaving the console with a
+            // stale/ghosted image.
+            invalidatePending = true;
+            lastRoomId = 0;
         }
 
         private void WorldToView(float worldX, float worldY, out int viewX, out int viewY)
@@ -58,6 +62,13 @@ namespace Meridian59.TuiClient
 
             try
             {
+                if (invalidatePending)
+                {
+                    invalidatePending = false;
+                    currentBuffer = null;
+                    nextBuffer    = null;
+                }
+
                 if (nextBuffer == null || width != lastWidth || height != lastHeight)
                 {
                     currentBuffer = new VideoBuffer(width, height);
@@ -180,11 +191,17 @@ namespace Meridian59.TuiClient
                     }
                 }
 
+                // Apply lighting to walls only — all objects drawn after so they're unaffected
+                WorldToView(avatar != null ? avatar.CoordinateX * 16f - 1024f : 0,
+                            avatar != null ? avatar.CoordinateY * 16f - 1024f : 0,
+                            out int avViewX, out int avViewY);
+                ApplyLighting(nextBuffer, avViewX, avViewY);
+
                 if (data != null)
                 {
                     uint targetID = (data.TargetObject as RoomObject)?.ID ?? 0;
 
-                    // Draw non-player objects first
+                    // Non-player objects (NPCs, mobs, items, etc.)
                     foreach (var obj in data.RoomObjects.ToList())
                     {
                         if (obj.Flags.IsPlayer || obj.IsAvatar) continue;
@@ -197,40 +214,33 @@ namespace Meridian59.TuiClient
                         }
                     }
 
-                    // Draw players on top
+                    // Players on top
                     foreach (var obj in data.RoomObjects.ToList())
                     {
-                        if (!obj.Flags.IsPlayer && !obj.IsAvatar) continue;
+                        if (!obj.Flags.IsPlayer || obj.IsAvatar) continue;
 
                         WorldToView(obj.CoordinateX * 16f - 1024f, obj.CoordinateY * 16f - 1024f, out int relX, out int relY);
                         if (relX >= 0 && relX < width && relY >= 1 && relY < height)
                         {
-                            if (!obj.IsAvatar)
-                                nextBuffer.Set(relX, relY, '@', 1.0f, ConsoleColor.White, ConsoleColor.DarkBlue);
+                            bool isTarget = obj.ID == targetID && targetID != 0;
+                            ConsoleColor bg = isTarget ? ConsoleColor.DarkMagenta : ConsoleColor.DarkBlue;
+                            nextBuffer.Set(relX, relY, '@', 1.0f, ConsoleColor.White, bg);
                         }
                     }
                 }
 
                 if (avatar != null)
                 {
-                    // Map angle (0..4095) to 8 directions
-                    // 0=E, 512=SE, 1024=S, 1536=SW, 2048=W, 2560=NW, 3072=N, 3584=NE
                     int dir = ((avatar.AngleUnits + 256) % 4096) / 512;
                     char icon = dir switch {
                         0 => '>', 1 => '\\', 2 => 'v', 3 => '/',
                         4 => '<', 5 => '\'', 6 => '^', 7 => '`',
                         _ => '@'
                     };
-                    // Place icon at avatar's actual map position (center when zoom>0 since centerX=avatar ROO)
-                    WorldToView(avatar.CoordinateX * 16f - 1024f, avatar.CoordinateY * 16f - 1024f, out int avX, out int avY);
-                    nextBuffer.Set(avX, avY, icon, 1.0f, ConsoleColor.White, ConsoleColor.DarkGray);
+                    nextBuffer.Set(avViewX, avViewY, icon, 1.0f, ConsoleColor.White, ConsoleColor.DarkGray);
                 }
                 else nextBuffer.Set(width / 2, height / 2, '+', 1.0f, ConsoleColor.White);
 
-                ApplyLighting(nextBuffer, width / 2, height / 2);
-
-                for (int x = 0; x < width; x++)
-                    nextBuffer.Cells[x, 0].Intensity = 1.0f;
 
                 ConsoleColor currentColor   = ConsoleColor.Gray;
                 ConsoleColor currentBgColor = ConsoleColor.Black;
@@ -275,7 +285,7 @@ namespace Meridian59.TuiClient
             }
         }
 
-        private void ApplyLighting(VideoBuffer buffer, int centerX, int centerY)
+        private void ApplyLighting(VideoBuffer buffer, int originX, int originY)
         {
             float maxDist = Math.Min(buffer.Width, buffer.Height) * 0.8f;
 
@@ -283,17 +293,15 @@ namespace Meridian59.TuiClient
             {
                 for (int x = 0; x < buffer.Width; x++)
                 {
-                    float dx = x - centerX;
-                    float dy = y - centerY;
+                    float dx = x - originX;
+                    float dy = y - originY;
                     float dist = MathF.Sqrt(dx * dx + dy * dy);
                     float intensity = Math.Clamp(1.0f - (dist / maxDist), 0.1f, 1.0f);
 
                     if (dist > 1.0f)
                     {
                         float angle = MathF.Atan2(-dy, dx);
-                        // North-Up vision cone
                         float targetScreenAngle = -avatarAngle;
-
                         float diff = MathF.Abs(NormalizeAngle(angle - targetScreenAngle));
                         if (diff > MathF.PI / 4.0f) intensity *= 0.4f;
                     }
@@ -353,9 +361,15 @@ namespace Meridian59.TuiClient
 
             // Hostile mobs/creatures
             if (obj.Flags.IsCreature || obj.Flags.IsAttackable)
-                return isTarget
-                    ? ('*', ConsoleColor.White,  ConsoleColor.Red)      // targeted: red box, white *
-                    : ('*', ConsoleColor.Black,   ConsoleColor.DarkRed); // untargeted: dark red box, black *
+            {
+                if (isTarget)
+                    return ('!', ConsoleColor.White,    ConsoleColor.Red);      // our target
+                if (obj.Flags.IsMinimapAggroSelf)
+                    return ('!', ConsoleColor.Black,    ConsoleColor.Red);      // targeting us (black ! = black ring in minimap)
+                if (obj.Flags.IsMinimapAggroOther)
+                    return ('!', ConsoleColor.White,    ConsoleColor.DarkRed);  // targeting another (white ring in minimap)
+                return ('*', ConsoleColor.DarkRed, ConsoleColor.Black);         // idle
+            }
 
             // Dialog NPCs
             if (obj.Flags.IsNPC)

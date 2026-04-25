@@ -1,0 +1,154 @@
+{
+  "format": 1,
+  "restore": {
+    "/var/home/mycroft/src/jimsfork/meridian59-dotnet/RoomInfoDumper.csproj": {}
+  },
+  "projects": {
+    "/var/home/mycroft/src/jimsfork/meridian59-dotnet/Meridian59/Meridian59.csproj": {
+      "version": "1.0.0",
+      "restore": {
+        "projectUniqueName": "/var/home/mycroft/src/jimsfork/meridian59-dotnet/Meridian59/Meridian59.csproj",
+        "projectName": "Meridian59",
+        "projectPath": "/var/home/mycroft/src/jimsfork/meridian59-dotnet/Meridian59/Meridian59.csproj",
+        "packagesPath": "/home/mycroft/.nuget/packages/",
+        "outputPath": "/var/home/mycroft/src/jimsfork/meridian59-dotnet/Meridian59/obj/",
+        "projectStyle": "PackageReference",
+        "fallbackFolders": [
+          "/home/mycroft/.local/share/godot/mono/GodotNuGetFallbackFolder"
+        ],
+        "configFilePaths": [
+          "/home/mycroft/.nuget/NuGet/NuGet.Config",
+          "/home/mycroft/.nuget/NuGet/config/Godot.Offline.Config"
+        ],
+        "originalTargetFrameworks": [
+          "net8.0"
+        ],
+        "sources": {
+          "https://api.nuget.org/v3/index.json": {}
+        },
+        "frameworks": {
+          "net8.0": {
+            "targetAlias": "net8.0",
+            "projectReferences": {}
+          }
+        },
+        "warningProperties": {
+          "warnAsError": [
+            "NU1605"
+          ]
+        },
+        "restoreAuditProperties": {
+          "enableAudit": "true",
+          "auditLevel": "low",
+          "auditMode": "direct"
+        }
+      },
+      "frameworks": {
+        "net8.0": {
+          "targetAlias": "net8.0",
+          "dependencies": {
+            "System.Drawing.Common": {
+              "target": "Package",
+              "version": "[8.0.0, )"
+            },
+            "System.Resources.Extensions": {
+              "target": "Package",
+              "version": "[8.0.0, )"
+            },
+            "System.ServiceProcess.ServiceController": {
+              "target": "Package",
+              "version": "[8.0.0, )"
+            },
+            "System.Text.Encoding.CodePages": {
+              "target": "Package",
+              "version": "[8.0.0, )"
+            }
+          },
+          "imports": [
+            "net461",
+            "net462",
+            "net47",
+            "net471",
+            "net472",
+            "net48",
+            "net481"
+          ],
+          "assetTargetFallback": true,
+          "warn": true,
+          "frameworkReferences": {
+            "Microsoft.NETCore.App": {
+              "privateAssets": "all"
+            }
+          },
+          "runtimeIdentifierGraphPath": "/home/mycroft/.dotnet/sdk/8.0.417/PortableRuntimeIdentifierGraph.json"
+        }
+      }
+    },
+    "/var/home/mycroft/src/jimsfork/meridian59-dotnet/RoomInfoDumper.csproj": {
+      "version": "1.0.0",
+      "restore": {
+        "projectUniqueName": "/var/home/mycroft/src/jimsfork/meridian59-dotnet/RoomInfoDumper.csproj",
+        "projectName": "RoomInfoDumper",
+        "projectPath": "/var/home/mycroft/src/jimsfork/meridian59-dotnet/RoomInfoDumper.csproj",
+        "packagesPath": "/home/mycroft/.nuget/packages/",
+        "outputPath": "/var/home/mycroft/src/jimsfork/meridian59-dotnet/obj/",
+        "projectStyle": "PackageReference",
+        "fallbackFolders": [
+          "/home/mycroft/.local/share/godot/mono/GodotNuGetFallbackFolder"
+        ],
+        "configFilePaths": [
+          "/home/mycroft/.nuget/NuGet/NuGet.Config",
+          "/home/mycroft/.nuget/NuGet/config/Godot.Offline.Config"
+        ],
+        "originalTargetFrameworks": [
+          "net8.0"
+        ],
+        "sources": {
+          "https://api.nuget.org/v3/index.json": {}
+        },
+        "frameworks": {
+          "net8.0": {
+            "targetAlias": "net8.0",
+            "projectReferences": {
+              "/var/home/mycroft/src/jimsfork/meridian59-dotnet/Meridian59/Meridian59.csproj": {
+                "projectPath": "/var/home/mycroft/src/jimsfork/meridian59-dotnet/Meridian59/Meridian59.csproj"
+              }
+            }
+          }
+        },
+        "warningProperties": {
+          "warnAsError": [
+            "NU1605"
+          ]
+        },
+        "restoreAuditProperties": {
+          "enableAudit": "true",
+          "auditLevel": "low",
+          "auditMode": "direct"
+        }
+      },
+      "frameworks": {
+        "net8.0": {
+          "targetAlias": "net8.0",
+          "imports": [
+            "net461",
+            "net462",
+            "net47",
+            "net471",
+            "net472",
+            "net48",
+            "net481"
+          ],
+          "assetTargetFallback": true,
+          "warn": true,
+          "frameworkReferences": {
+            "Microsoft.NETCore.App": {
+              "privateAssets": "all"
+            }
+          },
+          "runtimeIdentifierGraphPath": "/home/mycroft/.dotnet/sdk/8.0.417/PortableRuntimeIdentifierGraph.json"
+        }
+      }
+    }
+  }
+}

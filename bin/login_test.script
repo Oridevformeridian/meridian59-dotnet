@@ -1,0 +1,6 @@
+# Login test script
+wait 5000
+dump room
+pos
+wait 2000
+quit

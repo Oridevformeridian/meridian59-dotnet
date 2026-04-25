@@ -33,12 +33,23 @@ namespace Meridian59.TuiClient
         ToggleNetTab,
         OpenCharSheet,
         ToggleAutoAttack,
-        TargetNearest
+        TargetNearest,
+        TargetSelf,
+        Look,
     }
 
     public class TuiConfig : BotConfig
     {
         public Dictionary<ConsoleKey, TuiAction> KeyMap { get; private set; }
+
+        // Server-side player preferences (CF_* flags sent via UC_SEND_PREFERENCES)
+        public bool PrefSafetyOff    { get; set; } = false;
+        public bool PrefTempSafe     { get; set; } = true;
+        public bool PrefGrouping     { get; set; } = false;
+        public bool PrefAutoLoot     { get; set; } = true;
+        public bool PrefAutoCombine  { get; set; } = true;
+        public bool PrefReagentBag   { get; set; } = false;
+        public bool PrefSpellPower   { get; set; } = false;
 
         public TuiConfig() : base()
         {
@@ -58,7 +69,7 @@ namespace Meridian59.TuiClient
             KeyMap[ConsoleKey.A]          = TuiAction.MoveLeft;
             KeyMap[ConsoleKey.D]          = TuiAction.MoveRight;
             KeyMap[ConsoleKey.Spacebar]   = TuiAction.Use;
-            KeyMap[ConsoleKey.Q]          = TuiAction.Quit;
+            KeyMap[ConsoleKey.Q]          = TuiAction.TargetSelf;
             KeyMap[ConsoleKey.Add]        = TuiAction.ZoomIn;
             KeyMap[ConsoleKey.OemPlus]    = TuiAction.ZoomIn;
             KeyMap[ConsoleKey.Subtract]   = TuiAction.ZoomOut;
@@ -73,11 +84,28 @@ namespace Meridian59.TuiClient
             KeyMap[ConsoleKey.C]          = TuiAction.OpenCharSheet;
             KeyMap[ConsoleKey.F]          = TuiAction.ToggleAutoAttack;
             KeyMap[ConsoleKey.T]          = TuiAction.TargetNearest;
+            KeyMap[ConsoleKey.L]          = TuiAction.Look;
         }
 
         public override void ReadXml(XmlDocument Document)
         {
             base.ReadXml(Document);
+
+            XmlNode prefsNode = Document.DocumentElement.SelectSingleNode("/configuration/preferences");
+            if (prefsNode != null)
+            {
+                bool TryBool(string attr, bool def) {
+                    var v = prefsNode.Attributes[attr]?.Value;
+                    return v != null && bool.TryParse(v, out bool r) ? r : def;
+                }
+                PrefSafetyOff   = TryBool("safetyoff",   PrefSafetyOff);
+                PrefTempSafe    = TryBool("tempsafe",     PrefTempSafe);
+                PrefGrouping    = TryBool("grouping",     PrefGrouping);
+                PrefAutoLoot    = TryBool("autoloot",     PrefAutoLoot);
+                PrefAutoCombine = TryBool("autocombine",  PrefAutoCombine);
+                PrefReagentBag  = TryBool("reagentbag",   PrefReagentBag);
+                PrefSpellPower  = TryBool("spellpower",   PrefSpellPower);
+            }
 
             XmlNode keymapNode = Document.DocumentElement.SelectSingleNode("/configuration/keymap");
             if (keymapNode != null)

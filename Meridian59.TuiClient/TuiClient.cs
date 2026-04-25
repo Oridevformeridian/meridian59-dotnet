@@ -35,6 +35,11 @@ namespace Meridian59.TuiClient
         Buy,
         Offer,
         SpellTarget,
+        LookList,
+        LookDetail,
+        GetList,
+        StatChange,
+        StatChangeConfirm,
     }
 
     public enum NewCharTab { Stats = 0, Skills = 1, Spells = 2, Looks = 3 }
@@ -63,6 +68,7 @@ namespace Meridian59.TuiClient
         private LogTab activeTab = LogTab.Chat;
         private AsciiRenderer renderer;
         private PathRecorder recorder;
+        private PathReplayer replayer;
         private bool isRecording = false;
         private string recordingFile = null;
         private bool isNoClip = false;
@@ -78,6 +84,15 @@ namespace Meridian59.TuiClient
         private const byte  SPEED_RUN       = 36;
         private const int   MOVE_DELAY_MS   = 100;
         private DateTime lastMoveTime = DateTime.MinValue;
+        private DateTime lastRoomTransitionTime = DateTime.MinValue;
+
+        // Key-hold movement: replay the last direction every tick while the key is still down.
+        // Console gives only key-down events; OS auto-repeat fires every ~30ms after initial ~400ms delay.
+        // We use those repeat events to keep lastKeyMoveTime fresh; if it goes stale (>150ms) we stop.
+        private int heldMoveDx = 0;
+        private int heldMoveDz = 0;
+        private DateTime lastKeyMoveTime = DateTime.MinValue;
+        private const int KEY_HOLD_TIMEOUT_MS = 150;
 
         private int lastWindowWidth;
         private int lastWindowHeight;
@@ -129,9 +144,40 @@ namespace Meridian59.TuiClient
         private int spellTargetSelectedIndex = 0;
         private bool spellTargetInventory = true; // true=inventory, false=room objects
 
+        // Look popup state
+        private List<RoomObject> lookCandidates = new();
+        private int lookSelectedIndex = 0;
+
+        // Get popup state
+        private List<RoomObject> getCandidates = new();
+        private int getSelectedIndex = 0;
+
+        // StatChange popup state
+        // Rows 0-5 = stats (Might/Int/Sta/Agi/Mys/Aim), rows 6-12 = schools (Sha/Qor/Kra/Far/Rij/Jal/WC)
+        private int statChangeSelectedIndex = 0;
+        private int statChangeEditingIndex = -1;   // -1 = not editing
+        private string statChangeEditBuffer = "";
+
         // Combat state
         private bool autoAttack = false;
+        private bool showWhoList = false;
+        private bool soundEnabled = false;
         private int lastAvatarHP = -1;
+
+        // Convey-all macro state
+        private Queue<uint> conveyQueue = new Queue<uint>();
+        private uint conveySpellID = 0;
+        private DateTime conveyNextCastTime = DateTime.MinValue;
+
+        // Drain-unbound macro state
+        private bool drainUnbound = false;
+        private uint drainUnboundSpellID = 0;
+        private string drainUnboundSpellName = "";
+
+        // HP flash state — flashes bar white→red for a short burst on damage
+        private int    hpFlashFrames  = 0;   // countdown frames remaining
+        private bool   hpFlashPhase   = false; // alternates bar color each draw
+        private const int HP_FLASH_FRAMES = 8; // ~800ms at 100ms tick
 
         // Composition State
         private string composeRecipient = "";
@@ -162,12 +208,101 @@ namespace Meridian59.TuiClient
             public readonly DateTime Timestamp;
             public readonly string Type;
             public readonly string Text;
-            public LogEntry(string type, string text) { Timestamp = DateTime.Now; Type = type; Text = text; }
+            public readonly List<ChatStyle> Styles;     // null = plain text
+            public readonly int StyleOffset;             // unused; reserved
+            public readonly bool IsContinuation;         // true = wrap overflow line, no prefix
+            public LogEntry(string type, string text) { Timestamp = DateTime.Now; Type = type; Text = text; Styles = null; StyleOffset = 0; IsContinuation = false; }
+            public LogEntry(string type, string text, List<ChatStyle> styles, int styleOffset, bool isContinuation = false) { Timestamp = DateTime.Now; Type = type; Text = text; Styles = styles; StyleOffset = styleOffset; IsContinuation = isContinuation; }
+        }
+
+        /// <summary>Maps a M59 ChatColor to the nearest ConsoleColor.</summary>
+        private static ConsoleColor ChatColorToConsole(ChatColor c, bool bold)
+        {
+            switch (c)
+            {
+                case ChatColor.Red:          return bold ? ConsoleColor.Red          : ConsoleColor.DarkRed;
+                case ChatColor.Green:        return bold ? ConsoleColor.Green        : ConsoleColor.DarkGreen;
+                case ChatColor.Blue:         return bold ? ConsoleColor.Blue         : ConsoleColor.DarkBlue;
+                case ChatColor.Cyan:         return bold ? ConsoleColor.Cyan         : ConsoleColor.DarkCyan;
+                case ChatColor.Aquamarine:   return bold ? ConsoleColor.Cyan         : ConsoleColor.DarkCyan;
+                case ChatColor.Purple:       return bold ? ConsoleColor.Magenta      : ConsoleColor.DarkMagenta;
+                case ChatColor.Magenta:      return bold ? ConsoleColor.Magenta      : ConsoleColor.DarkMagenta;
+                case ChatColor.Violet:       return bold ? ConsoleColor.Magenta      : ConsoleColor.DarkMagenta;
+                case ChatColor.Yellow:       return bold ? ConsoleColor.Yellow       : ConsoleColor.DarkYellow;
+                case ChatColor.Jonquil:      return bold ? ConsoleColor.Yellow       : ConsoleColor.DarkYellow;
+                case ChatColor.Golden:       return bold ? ConsoleColor.Yellow       : ConsoleColor.DarkYellow;
+                case ChatColor.Champagne:    return bold ? ConsoleColor.Yellow       : ConsoleColor.DarkYellow;
+                case ChatColor.Orange:       return bold ? ConsoleColor.Yellow       : ConsoleColor.DarkYellow;
+                case ChatColor.Fire:         return bold ? ConsoleColor.Red          : ConsoleColor.DarkYellow;
+                case ChatColor.Lime:         return bold ? ConsoleColor.Green        : ConsoleColor.Green;
+                case ChatColor.Emerald:      return bold ? ConsoleColor.Green        : ConsoleColor.DarkGreen;
+                case ChatColor.ToxicGreen:   return bold ? ConsoleColor.Green        : ConsoleColor.DarkGreen;
+                case ChatColor.QuestGreen:   return bold ? ConsoleColor.Green        : ConsoleColor.DarkGreen;
+                case ChatColor.QuestRed:     return bold ? ConsoleColor.Red          : ConsoleColor.DarkRed;
+                case ChatColor.ImperialBlue: return bold ? ConsoleColor.Blue         : ConsoleColor.DarkBlue;
+                case ChatColor.Steel:        return bold ? ConsoleColor.Cyan         : ConsoleColor.DarkCyan;
+                case ChatColor.Pink:         return bold ? ConsoleColor.Magenta      : ConsoleColor.Magenta;
+                case ChatColor.Drab:         return bold ? ConsoleColor.DarkGray     : ConsoleColor.DarkGray;
+                case ChatColor.Bronze:       return bold ? ConsoleColor.DarkYellow   : ConsoleColor.DarkYellow;
+                case ChatColor.OffWhite:     return bold ? ConsoleColor.White        : ConsoleColor.Gray;
+                case ChatColor.Black:        return ConsoleColor.DarkGray; // black-on-black invisible; use dark gray
+                case ChatColor.White:        return bold ? ConsoleColor.White        : ConsoleColor.Gray;
+                case ChatColor.MercenaryColor: return bold ? ConsoleColor.Cyan       : ConsoleColor.DarkCyan;
+                // Gray scale
+                case ChatColor.Gray1:  case ChatColor.Gray2:  case ChatColor.Gray3:
+                    return ConsoleColor.DarkGray;
+                case ChatColor.Gray4:  case ChatColor.Gray5:  case ChatColor.Gray6:
+                    return ConsoleColor.Gray;
+                case ChatColor.Gray7:  case ChatColor.Gray8:  case ChatColor.Gray9:  case ChatColor.Gray10:
+                    return ConsoleColor.White;
+                default:             return bold ? ConsoleColor.White : ConsoleColor.Gray;
+            }
+        }
+
+        /// <summary>
+        /// Writes up to <paramref name="maxLen"/> chars of <paramref name="text"/> with
+        /// M59 chat styles applied, then pads with spaces to <paramref name="maxLen"/>.
+        /// </summary>
+        private static void WriteStyledString(string text, List<ChatStyle> styles, int maxLen)
+        {
+            if (styles == null || styles.Count == 0)
+            {
+                Console.ForegroundColor = ConsoleColor.Gray;
+                Console.Write(text.Length <= maxLen ? text.PadRight(maxLen) : text[..maxLen]);
+                return;
+            }
+
+            int written = 0;
+            int remaining = maxLen;
+
+            foreach (var style in styles)
+            {
+                if (remaining <= 0) break;
+                int start = style.StartIndex;
+                int len   = Math.Min(style.Length, remaining);
+                if (len <= 0) continue;
+                if (start + len > text.Length) len = Math.Max(0, text.Length - start);
+                if (len <= 0) continue;
+
+                Console.ForegroundColor = ChatColorToConsole(style.Color, style.IsBold);
+                Console.Write(text.Substring(start, len));
+                written   += len;
+                remaining -= len;
+            }
+
+            // Pad remainder
+            if (remaining > 0)
+            {
+                Console.ForegroundColor = ConsoleColor.Gray;
+                Console.Write(new string(' ', remaining));
+            }
         }
 
         // Text input
         private string inputBuffer = "";
         private bool inputMode = false;  // true = typing into chat input; false = gameplay keys active
+        private readonly List<string> commandHistory = new List<string>();
+        private int historyIndex = -1;  // -1 = not browsing; 0 = oldest entry
 
         // Auto-quit
         private const int AUTO_QUIT_SECONDS = 0;
@@ -267,16 +402,73 @@ namespace Meridian59.TuiClient
                 DrawTuiLayout();
             }
 
-            // Hook up data changes to trigger redraws if popup is active
-            Data.NewsGroup.Articles.ListChanged += (s, e) => { if (activePopup == PopupMode.NewsList) DrawMap(); };
-            ResourceManager.Mails.ListChanged += (s, e) => { if (activePopup == PopupMode.MailList) DrawMap(); };
-            Data.NewsGroup.PropertyChanged += (s, e) => { if (activePopup == PopupMode.NewsRead && e.PropertyName == "Text") DrawMap(); };
+             // Hook up data changes to trigger redraws if popup is active
+             Data.NewsGroup.Articles.ListChanged += (s, e) => { if (activePopup == PopupMode.NewsList) DrawMap(); };
+             ResourceManager.Mails.ListChanged += (s, e) => { if (activePopup == PopupMode.MailList) DrawMap(); };
+             Data.AvatarBuffs.ListChanged += (s, e) => { if (HasTty) lock (consoleLock) DrawBuffs(); };
+              Data.OnlinePlayers.ListChanged += (s, e) =>
+              {
+                  if (!HasTty) return;
+                  if (soundEnabled && (e.ListChangedType == System.ComponentModel.ListChangedType.ItemAdded || e.ListChangedType == System.ComponentModel.ListChangedType.ItemDeleted))
+                      try { Console.Beep(880, 120); } catch { }
+                  if (showWhoList) lock (consoleLock) DrawMap();
+              };
+             Data.AvatarBuffs.ListChanged += (s, e) => { if (HasTty) lock (consoleLock) DrawBuffs(); };
+             Data.NewsGroup.PropertyChanged += (s, e) =>
+             {
+                 if (e.PropertyName == "Text" && activePopup == PopupMode.NewsRead) DrawMap();
+                  if (e.PropertyName == "IsVisible" && Data.NewsGroup.IsVisible)
+                  {
+                      Data.LookObject.IsVisible = false;  // suppress the companion Look message
+                      activePopup      = PopupMode.NewsList;
+                      popupSelectedIndex  = 0;
+                      popupScrollOffset   = 0;
+                      DrawMap();
+                  }
+             };
+
+             // Look response — server sent us a description
+             Data.LookObject.PropertyChanged += (s, e) =>
+             {
+                 if (e.PropertyName == "IsVisible" && Data.LookObject.IsVisible)
+                 {
+                     // Don't overwrite the news popup if a newsglobe look just opened it
+                     if (activePopup == PopupMode.NewsList || activePopup == PopupMode.NewsRead)
+                         return;
+                     activePopup = PopupMode.LookDetail;
+                     DrawMap();
+                 }
+             };
+
+             Data.LookPlayer.PropertyChanged += (s, e) =>
+             {
+                 if (e.PropertyName == "IsVisible" && Data.LookPlayer.IsVisible)
+                 {
+                     activePopup = PopupMode.LookDetail;
+                     DrawMap();
+                 }
+             };
 
             // Ensure UI updates when room or avatar changes
             Data.PropertyChanged += (s, e) => {
                 if (e.PropertyName == "RoomInformation" || e.PropertyName == "AvatarObject")
                 {
                     DrawRoomInfo();
+                    DrawBuffs();
+                    DrawMap();
+                }
+            };
+
+            // Ancient trinket / stat reset offer from server
+            Data.StatChangeInfo.PropertyChanged += (s, e) =>
+            {
+                if (e.PropertyName == "IsVisible" && Data.StatChangeInfo.IsVisible)
+                {
+                    statChangeSelectedIndex = 0;
+                    statChangeEditingIndex  = -1;
+                    statChangeEditBuffer    = "";
+                    activePopup = PopupMode.StatChange;
+                    Log("SYS", "Ancient trinket activated — redistribute your stats.");
                     DrawMap();
                 }
             };
@@ -290,6 +482,7 @@ namespace Meridian59.TuiClient
             }
             catch (InvalidOperationException) { /* no TTY */ }
 
+            replayer?.Update();
             ProcessScriptQueue();
 
             // Manually handle input loop since IsService=true disables it in base
@@ -322,6 +515,57 @@ namespace Meridian59.TuiClient
                 gameModeSince = DateTime.Now;
             }
 
+            // Key-hold movement: replay last direction every tick while key is held
+            if (heldMoveDx != 0 || heldMoveDz != 0)
+            {
+                if ((DateTime.Now - lastKeyMoveTime).TotalMilliseconds > KEY_HOLD_TIMEOUT_MS)
+                {
+                    heldMoveDx = 0;
+                    heldMoveDz = 0;
+                }
+                else
+                {
+                    HandleMovement(heldMoveDx, heldMoveDz);
+                }
+            }
+
+            // Convey-all macro: drain one item per 500ms, only consume when cast can fire
+            while (conveyQueue.Count > 0 && DateTime.Now >= conveyNextCastTime)
+            {
+                uint itemID = conveyQueue.Peek();
+                // Skip items that were already removed from inventory (consumed by a prior cast)
+                var item = Data.InventoryObjects.GetItemByID(itemID);
+                if (item == null)
+                {
+                    conveyQueue.Dequeue();
+                    continue;
+                }
+                // Wait for cast cooldown — don't consume the item until we can actually send
+                if (!GameTick.CanReqCast())
+                    break;
+                conveyQueue.Dequeue();
+                Data.SelfTarget = false;
+                Data.TargetID = itemID;
+                SendReqCastMessage(conveySpellID);
+                Log("SYS", $"[Convey] {item.Name} ({conveyQueue.Count} remaining)");
+                conveyNextCastTime = DateTime.Now.AddMilliseconds(500);
+                break;
+            }
+
+            // Drain-unbound: self-cast a spell at max rate whenever not targeting a creature
+            if (drainUnbound && drainUnboundSpellID != 0)
+            {
+                var drainTgt = Data.TargetObject as RoomObject;
+                bool combatTarget = drainTgt != null &&
+                                    (drainTgt.Flags.IsCreature || drainTgt.Flags.IsAttackable);
+                if (!combatTarget && GameTick.CanReqCast())
+                {
+                    Data.SelfTarget = true;
+                    SendReqCastMessage(drainUnboundSpellID);
+                    Data.SelfTarget = false;
+                }
+            }
+
             // Combat tick — runs regardless of TTY
             if (autoAttack)
             {
@@ -332,10 +576,38 @@ namespace Meridian59.TuiClient
                     SendReqAttackMessage(attackTarget);
                 }
 
-                // Auto-target nearest hostile when we take damage with no target
+                // Auto-target as soon as any mob acquires aggro on us (MM_AGGRO_SELF),
+                // even before a hit lands. Fall back to nearest if nothing has aggro.
+                if (Data.TargetObject == null)
+                {
+                    var aggressor = Data.RoomObjects
+                        .OfType<RoomObject>()
+                        .Where(o => o.Flags.IsMinimapAggroSelf)
+                        .OrderBy(o => {
+                            var av = Data.AvatarObject;
+                            if (av == null) return float.MaxValue;
+                            float dx = o.CoordinateX - av.CoordinateX;
+                            float dz = o.CoordinateY - av.CoordinateY;
+                            return dx * dx + dz * dz;
+                        })
+                        .FirstOrDefault();
+                    if (aggressor != null)
+                    {
+                        Data.SelfTarget = false;
+                        Data.TargetID = aggressor.ID;
+                        FaceTarget(aggressor);
+                        Log("SYS", $"Auto-targeted aggressor: {aggressor.Name}");
+                    }
+                }
+                // HP tracking — flash bar and fallback auto-target on damage
                 int currentHP = (int)(Data.AvatarCondition.GetItemByNum(1)?.ValueCurrent ?? -1);
-                if (lastAvatarHP >= 0 && currentHP >= 0 && currentHP < lastAvatarHP && Data.TargetObject == null)
-                    AutoTargetNearest();
+                if (lastAvatarHP >= 0 && currentHP >= 0 && currentHP < lastAvatarHP)
+                {
+                    hpFlashFrames = HP_FLASH_FRAMES;
+                    hpFlashPhase  = true;
+                    if (Data.TargetObject == null)
+                        AutoTargetNearest();
+                }
                 if (currentHP >= 0) lastAvatarHP = currentHP;
             }
 
@@ -344,7 +616,15 @@ namespace Meridian59.TuiClient
                 // NPC context targeting: auto-select the nearest NPC in front of the avatar
                 // (only when not locked onto a live hostile combat target)
                 UpdateNPCTarget();
-                lastAvatarHP = (int)(Data.AvatarCondition.GetItemByNum(1)?.ValueCurrent ?? -1);
+
+                // Still track HP for flash even when autoAttack is off
+                int nonCombatHP = (int)(Data.AvatarCondition.GetItemByNum(1)?.ValueCurrent ?? -1);
+                if (lastAvatarHP >= 0 && nonCombatHP >= 0 && nonCombatHP < lastAvatarHP)
+                {
+                    hpFlashFrames = HP_FLASH_FRAMES;
+                    hpFlashPhase  = true;
+                }
+                if (nonCombatHP >= 0) lastAvatarHP = nonCombatHP;
             }
 
             // UI rendering only when TTY is available
@@ -376,6 +656,7 @@ namespace Meridian59.TuiClient
                 }
                 DrawStats();
                 DrawRoomInfo();
+                DrawBuffs();
                 DrawMap();
                 DrawInputField();
             }
@@ -446,12 +727,32 @@ namespace Meridian59.TuiClient
         protected override void HandleSaidMessage(SaidMessage Message)
         {
             base.HandleSaidMessage(Message);
-            string text = Message.Message?.FullString;
+            var msg = Message.Message;
+            string text = msg?.FullString;
             if (!string.IsNullOrEmpty(text))
             {
-                var speaker = Data.RoomObjects.FirstOrDefault(o => o.ID == Message.Message.SourceObjectID);
+                var speaker = Data.RoomObjects.FirstOrDefault(o => o.ID == msg.SourceObjectID);
                 string speakerName = speaker?.Name ?? "???";
-                Log("CHAT", $"{speakerName}: {text}");
+
+                bool isEmote = msg.TransmissionType == ChatTransmissionType.Emote;
+                string logTag = isEmote ? "EMOTE" : "CHAT";
+                // Emotes: "* Name text"  — Said: "Name: text"
+                string prefix = isEmote ? $"* {speakerName} " : $"{speakerName}: ";
+                string full = prefix + text;
+
+                // Offset all style indices by the plain prefix length so they align in the combined string
+                List<ChatStyle> styles = null;
+                if (msg.Styles != null && msg.Styles.Count > 0)
+                {
+                    styles = new List<ChatStyle>(msg.Styles.Count);
+                    // Leading plain prefix — emotes in italic-style yellow, says in white
+                    ChatColor prefixColor = isEmote ? ChatColor.Yellow : ChatColor.White;
+                    styles.Add(new ChatStyle(0, prefix.Length, false, false, false, false, false, prefixColor));
+                    foreach (var s in msg.Styles)
+                        styles.Add(new ChatStyle(s.StartIndex + prefix.Length, s.Length, s.IsBold, s.IsCursive, s.IsUnderline, s.IsStrikeout, s.IsLink, s.Color));
+                }
+
+                LogStyled(logTag, full, styles);
             }
         }
 
@@ -461,6 +762,18 @@ namespace Meridian59.TuiClient
         protected override void HandleGameStateMessage(GameStateMessage Message)
         {
             base.HandleGameStateMessage(Message);
+
+            // Apply preferences from config to ClientPreferences then send to server
+            Data.ClientPreferences.IsSafetyOff   = Config.PrefSafetyOff;
+            Data.ClientPreferences.TempSafe       = Config.PrefTempSafe;
+            Data.ClientPreferences.Grouping       = Config.PrefGrouping;
+            Data.ClientPreferences.AutoLoot       = Config.PrefAutoLoot;
+            Data.ClientPreferences.AutoCombine    = Config.PrefAutoCombine;
+            Data.ClientPreferences.ReagentBag     = Config.PrefReagentBag;
+            Data.ClientPreferences.SpellPower     = Config.PrefSpellPower;
+            SendUserCommandSendPreferences();
+            Log("SYS", $"Prefs sent: TempSafe={Config.PrefTempSafe} AutoLoot={Config.PrefAutoLoot} AutoCombine={Config.PrefAutoCombine} Grouping={Config.PrefGrouping}");
+
             if (!NoAutoexec)
             {
                 LoadAutoexec();
@@ -606,6 +919,9 @@ namespace Meridian59.TuiClient
             {
                 Log("SYS", $"Entered room: {Message.RoomInfo.RoomName} (ID: {Message.RoomInfo.RoomID}, File: {Message.RoomInfo.RoomFile})");
                 lastLoggedRoomId = Message.RoomInfo.RoomID;
+                recorder?.RecordRoom(Data.AvatarObject, Message.RoomInfo.RoomID, Message.RoomInfo.RoomName);
+                lastRoomTransitionTime = DateTime.Now;
+                replayer?.NotifyRoomChanged(Message.RoomInfo.RoomID);
             }
 
             // Resolve ROO resources on main thread if needed (base class logic)
@@ -637,6 +953,10 @@ namespace Meridian59.TuiClient
         {
             var pi = (MessageTypeGameMode)Message.PI;
 
+            // Clear stale articles before base appends new ones
+            if (pi == MessageTypeGameMode.Articles)
+                Data.NewsGroup.Articles.Clear();
+
             // Only log important stuff to UI to prevent spam
             if (pi == MessageTypeGameMode.Message && Message is MessageMessage pMsg)
             {
@@ -659,6 +979,49 @@ namespace Meridian59.TuiClient
             }
 
             base.HandleGameModeMessage(Message);
+
+            // News debug: log after base has processed so Data is already updated
+            if (pi == MessageTypeGameMode.LookNewsGroup && Message is LookNewsGroupMessage lngMsg)
+            {
+                Log("SYS", $"NEWS DBG LookNewsGroup: GlobeID={lngMsg.NewsGroup?.NewsGlobeID} IsVisible={Data.NewsGroup.IsVisible} activePopup={activePopup}");
+                SendReqArticles();
+            }
+            else if (pi == MessageTypeGameMode.Articles && Message is ArticlesMessage artMsg)
+                Log("SYS", $"NEWS DBG Articles: count={artMsg.Articles?.Length} total now={Data.NewsGroup.Articles.Count} activePopup={activePopup}");
+            else if (pi == MessageTypeGameMode.Look && Message is LookMessage lookMsg)
+                Log("SYS", $"NEWS DBG Look: name={lookMsg.ObjectInfo?.ObjectBase?.Name} LookObject.IsVisible={Data.LookObject.IsVisible} activePopup={activePopup}");
+
+            // Server position correction: base's StartMoveTo() only initiates interpolation;
+            // CoordinateX/Y stays at the old position until animation ticks complete.
+            // For a headless client we don't need smooth animation — snap immediately so
+            // the renderer and any subsequent move packets use the server-authoritative position.
+            if (pi == MessageTypeGameMode.Move && Message is MoveMessage snapMsg &&
+                snapMsg.ObjectID == Data.AvatarID && Data.AvatarObject != null)
+            {
+                var av = Data.AvatarObject;
+                ushort prevX = av.CoordinateX;
+                ushort prevY = av.CoordinateY;
+                // Stop interpolation before snapping so UpdatePosition() can't
+                // tick the avatar back to the optimistic MoveDestination after we correct.
+                av.IsMoving = false;
+                av.CoordinateX = snapMsg.NewCoordinateX;
+                av.CoordinateY = snapMsg.NewCoordinateY;
+                // Invalidate dedup so the next sent move reflects the corrected position.
+                lastSentPositionX = ushort.MaxValue;
+                lastSentPositionY = ushort.MaxValue;
+                // Significant correction while replaying → abort replay to avoid fight with server.
+                // Suppress for 3s after a room transition — entry-point drift is expected and harmless.
+                int ddx = (int)snapMsg.NewCoordinateX - (int)prevX;
+                int ddy = (int)snapMsg.NewCoordinateY - (int)prevY;
+                double corr = Math.Sqrt(ddx * ddx + ddy * ddy);
+                bool recentTransition = (DateTime.Now - lastRoomTransitionTime).TotalMilliseconds < 3000;
+                if (corr > 128 && replayer != null && replayer.IsReplaying && !recentTransition)
+                {
+                    replayer.Stop();
+                    Log("SYS", $"Server correction ({corr:F0} units) — replay aborted.");
+                }
+                renderer.Invalidate();
+            }
 
             // After base has populated Data.CharCreationInfo, open the popup
             if (pi == MessageTypeGameMode.CharInfo && charCreationState == CharCreationState.AwaitingCharInfo)
@@ -725,66 +1088,75 @@ namespace Meridian59.TuiClient
         {
             int w = Console.WindowWidth;
             int h = Console.WindowHeight;
-            if (w < 85 || h < 10) return;
+             if (w < 85 || h < 10) return;
 
-            lock (consoleLock)
-            {
-                // Row 0: top border
-                Console.SetCursorPosition(0, 0);
-                string topL = "╔" + new string('═', 14) + "╦" + new string('═', 43) + "╦" + new string('═', 19) + "╗"; // 80 chars
-                string topR = " ╔" + new string('═', Math.Max(0, w - 84)) + "╗";
-                Console.Write(SafeLine(topL + topR, w - 1));
+             lock (consoleLock)
+             {
+                 DrawChrome(w, h);
+                 DrawStats();
+                 DrawRoomInfo();
+                 DrawBuffs();
+                 DrawLog();
+                 DrawInputField();
+                 DrawMap();
+             }
+         }
 
-                // Rows 2-4: stats sub-borders
-                Console.SetCursorPosition(0, 2);
-                string midL = "║" + new string(' ', 14) + "╠" + new string('═', 13) + "╦" + new string('═', 15) + "╦" + new string('═', 13) + "╬" + new string('═', 19) + "╣";
-                string midR = " ║" + new string(' ', Math.Max(0, w - 84)) + "║";
-                Console.Write(SafeLine(midL + midR, w - 1));
+         private void DrawChrome(int w = 0, int h = 0)
+         {
+             if (w == 0) w = Console.WindowWidth;
+             if (h == 0) h = Console.WindowHeight;
+             if (w < 85 || h < 10) return;
 
-                Console.SetCursorPosition(0, 3);
-                string statL = "║" + new string(' ', 14) + "║" + new string(' ', 13) + "║" + new string(' ', 15) + "║" + new string(' ', 13) + "║" + new string(' ', 19) + "║";
-                Console.Write(SafeLine(statL + midR, w - 1));
+             // Row 0: top border
+             Console.SetCursorPosition(0, 0);
+             string topL = "╔" + new string('═', 14) + "╦" + new string('═', 43) + "╦" + new string('═', 19) + "╗"; // 80 chars
+             string topR = " ╔" + new string('═', Math.Max(0, w - 84)) + "╗";
+             Console.Write(SafeLine(topL + topR, w - 1));
 
-                Console.SetCursorPosition(0, 4);
-                string botL = "╠" + new string('═', 14) + "╩" + new string('═', 13) + "╩" + new string('═', 15) + "╩" + new string('═', 13) + "╩" + new string('═', 19) + "╣";
-                Console.Write(SafeLine(botL + midR, w - 1));
+             // Rows 2-4: stats sub-borders
+             Console.SetCursorPosition(0, 2);
+             string midL = "║" + new string(' ', 14) + "╠" + new string('═', 13) + "╦" + new string('═', 15) + "╦" + new string('═', 13) + "╬" + new string('═', 19) + "╣";
+             string midR = " ║" + new string(' ', Math.Max(0, w - 84)) + "║";
+             Console.Write(SafeLine(midL + midR, w - 1));
 
-                // Side borders
-                for (int i = 1; i < h - 1; i++)
-                {
-                    if (i == 2 || i == 3 || i == 4 || i == h - 3 || i == h - 1) continue;
-                    Console.SetCursorPosition(0, i);
-                    Console.Write("║");
-                    Console.SetCursorPosition(79, i); 
-                    Console.Write("║ ║"); 
-                    Console.SetCursorPosition(w - 2, i);
-                    Console.Write("║");
-                }
+             Console.SetCursorPosition(0, 3);
+             string statL = "║" + new string(' ', 14) + "║" + new string(' ', 13) + "║" + new string(' ', 15) + "║" + new string(' ', 13) + "║" + new string(' ', 19) + "║";
+             Console.Write(SafeLine(statL + midR, w - 1));
 
-                // Input separator at h-3
-                Console.SetCursorPosition(0, h - 3);
-                string sepL = "╠" + new string('═', 78) + "╣";
-                string sepR = " ║" + new string(' ', Math.Max(0, w - 84)) + "║";
-                Console.Write(SafeLine(sepL + sepR, w - 1));
+             Console.SetCursorPosition(0, 4);
+             string botL = "╠" + new string('═', 14) + "╩" + new string('═', 13) + "╩" + new string('═', 15) + "╩" + new string('═', 13) + "╩" + new string('═', 19) + "╣";
+             Console.Write(SafeLine(botL + midR, w - 1));
 
-                // Input field row at h-2: Draw Borders explicitly
-                Console.SetCursorPosition(0, h - 2);
-                Console.Write("║");
-                Console.SetCursorPosition(79, h - 2);
-                Console.Write("║ ╚" + new string('═', Math.Max(0, w - 84)) + "╝");
+             // Side borders
+             for (int i = 1; i < h - 1; i++)
+             {
+                 if (i == 2 || i == 3 || i == 4 || i == h - 3 || i == h - 1) continue;
+                 Console.SetCursorPosition(0, i);
+                 Console.Write("║");
+                 Console.SetCursorPosition(79, i);
+                 Console.Write("║ ║");
+                 Console.SetCursorPosition(w - 2, i);
+                 Console.Write("║");
+             }
 
-                // Hint bar at h-1
-                Console.SetCursorPosition(0, h - 1);
-                string hints = " [Enter]Chat [WASD]Move [C]harSheet [F]ight [T]arget [R]un [+/-]Zoom [Q]uit";
-                Console.Write(SafeLine("╚" + hints.PadRight(78, '═') + "╝", w - 1));
+             // Input separator at h-3
+             Console.SetCursorPosition(0, h - 3);
+             string sepL = "╠" + new string('═', 78) + "╣";
+             string sepR = " ║" + new string(' ', Math.Max(0, w - 84)) + "║";
+             Console.Write(SafeLine(sepL + sepR, w - 1));
 
-                DrawStats();
-                DrawRoomInfo();
-                DrawLog();
-                DrawInputField();
-                DrawMap();
-            }
-        }
+             // Input field row at h-2
+             Console.SetCursorPosition(0, h - 2);
+             Console.Write("║");
+             Console.SetCursorPosition(79, h - 2);
+             Console.Write("║ ╚" + new string('═', Math.Max(0, w - 84)) + "╝");
+
+             // Hint bar at h-1
+             Console.SetCursorPosition(0, h - 1);
+             string hints = " [Enter]Chat [WASD]Move [C]harSheet [F]ight [T]arget [R]un [+/-]Zoom [Q]uit";
+             Console.Write(SafeLine("╚" + hints.PadRight(78, '═') + "╝", w - 1));
+         }
 
         private string SafeLine(string line, int max)
         {
@@ -801,44 +1173,139 @@ namespace Meridian59.TuiClient
             return $"{s.ValueCurrent,3}/{s.ValueMaximum,-3}";
         }
 
+        /// <summary>
+        /// Draws a single stat row as a full-width color bar across cols 1–14.
+        /// The text itself is the bar: filled portion has bar bg + black fg,
+        /// empty portion has dark gray bg + white fg. Split point tracks pct.
+        /// </summary>
+        private void DrawStatBar(int row, string label,
+            int cur, int max,
+            ConsoleColor barFull, ConsoleColor barEmpty,
+            ConsoleColor flashFull, ConsoleColor flashEmpty,
+            bool flashing)
+        {
+            const int COL   = 1;
+            const int WIDTH = 14;  // cols 1..14 inclusive
+
+            ConsoleColor fillBg  = flashing ? flashFull  : barFull;
+            ConsoleColor emptyBg = flashing ? flashEmpty : ConsoleColor.DarkGray;
+
+            // Build the 14-char content string: "HP 100/100    "
+            string valStr = max > 0 ? $"{cur,3}/{max,-3}" : "---/---";
+            string content = $"{label} {valStr}".PadRight(WIDTH);
+            if (content.Length > WIDTH) content = content[..WIDTH];
+
+            float pct    = (max > 0) ? Math.Clamp((float)cur / max, 0f, 1f) : 0f;
+            int   filled = (int)Math.Round(pct * WIDTH);
+
+            Console.SetCursorPosition(COL, row);
+
+            // Filled portion — bar color bg, black text
+            if (filled > 0)
+            {
+                Console.ForegroundColor = ConsoleColor.Black;
+                Console.BackgroundColor = fillBg;
+                Console.Write(content[..filled]);
+            }
+
+            // Empty portion — dark gray bg, white text
+            if (filled < WIDTH)
+            {
+                Console.ForegroundColor = ConsoleColor.White;
+                Console.BackgroundColor = emptyBg;
+                Console.Write(content[filled..]);
+            }
+
+            Console.ResetColor();
+        }
+
         public void DrawStats()
         {
             if (!HasTty) return;
             lock (consoleLock)
             {
-                // Bars (starts col 2)
-                Console.SetCursorPosition(2, 1);
-                Console.Write("HP: " + StatStr(Data.AvatarCondition, 1).PadRight(7));
+                var cond = Data.AvatarCondition;
+                var hp   = cond.GetItemByNum(1);
+                var mp   = cond.GetItemByNum(2);
+                var vg   = cond.GetItemByNum(3);
 
-                Console.SetCursorPosition(2, 2);
-                Console.Write("MP: " + StatStr(Data.AvatarCondition, 2).PadRight(7));
+                // Advance flash
+                bool flashing = hpFlashFrames > 0;
+                if (flashing)
+                {
+                    hpFlashPhase = !hpFlashPhase;
+                    hpFlashFrames--;
+                }
 
-                Console.SetCursorPosition(2, 3);
-                Console.Write("VG: " + StatStr(Data.AvatarCondition, 3).PadRight(7));
+                // HP — red bar, flashes White→Red on damage
+                DrawStatBar(1, "HP",
+                    hp != null ? (int)hp.ValueCurrent : 0,
+                    hp != null ? (int)hp.ValueMaximum : 0,
+                    barFull:   ConsoleColor.DarkRed,
+                    barEmpty:  ConsoleColor.DarkGray,
+                    flashFull: hpFlashPhase ? ConsoleColor.White : ConsoleColor.Red,
+                    flashEmpty:ConsoleColor.DarkGray,
+                    flashing:  flashing);
 
-                uint cash = 0;
-                var shilling = Data.InventoryObjects.GetItemByName("shilling", false);
-                if (shilling != null) cash = (uint)shilling.Count;
+                // MP — blue bar
+                DrawStatBar(2, "MP",
+                    mp != null ? (int)mp.ValueCurrent : 0,
+                    mp != null ? (int)mp.ValueMaximum : 0,
+                    barFull:   ConsoleColor.DarkBlue,
+                    barEmpty:  ConsoleColor.DarkGray,
+                    flashFull: ConsoleColor.DarkBlue,
+                    flashEmpty:ConsoleColor.DarkGray,
+                    flashing:  false);
 
-                // Sub-stats (starts col 17, 26, 32)
+                // VG — green bar
+                DrawStatBar(3, "VG",
+                    vg != null ? (int)vg.ValueCurrent : 0,
+                    vg != null ? (int)vg.ValueMaximum : 0,
+                    barFull:   ConsoleColor.DarkGreen,
+                    barEmpty:  ConsoleColor.DarkGray,
+                    flashFull: ConsoleColor.DarkGreen,
+                    flashEmpty:ConsoleColor.DarkGray,
+                    flashing:  false);
+
+                // Unbound energy and training points from AvatarAttributes (matched by name)
+                var unboundStat  = Data.AvatarAttributes.FirstOrDefault(s =>
+                    s.ResourceName.IndexOf("unbound", StringComparison.OrdinalIgnoreCase) >= 0);
+                var trainingStat = Data.AvatarAttributes.FirstOrDefault(s =>
+                    s.ResourceName.IndexOf("train", StringComparison.OrdinalIgnoreCase) >= 0);
+                int unboundVal  = unboundStat  != null ? (int)unboundStat.ValueCurrent  : -1;
+                int trainingVal = trainingStat != null ? (int)trainingStat.ValueCurrent : -1;
+
+                // RTT
                 Console.SetCursorPosition(17, 3);
-                Console.Write($"RTT:{ServerConnection.RTT,-3}");
+                Console.ForegroundColor = ConsoleColor.DarkGray;
+                Console.Write($"RTT:{ServerConnection.RTT,-3}  ");
 
-                Console.SetCursorPosition(26, 3);
-                Console.Write($"RST:{(Data.IsResting ? "Y" : "N"),-1}");
+                // RST / STD modal badge
+                if (Data.IsResting)
+                {
+                    Console.ForegroundColor = ConsoleColor.DarkYellow;
+                    Console.Write("RST");
+                }
+                else
+                {
+                    Console.ForegroundColor = ConsoleColor.DarkGreen;
+                    Console.Write("STD");
+                }
 
-                Console.SetCursorPosition(32, 3);
-                Console.Write($"$:{cash,-5}");
+                // Unbound energy
+                Console.ForegroundColor = ConsoleColor.DarkGray;
+                Console.Write("  ");
+                if (unboundVal >= 0)
+                    Console.Write($"UNB:{unboundVal,-5}");
+                else
+                    Console.Write("          ");
 
-                // Combat status (row 2, cols 17-57)
-                string tgtName = Data.TargetObject?.Name ?? "";
-                string atkStr = autoAttack ? "[ATK:ON ] " : "[ATK:OFF] ";
-                string combatLine = tgtName.Length > 0
-                    ? atkStr + "TGT:" + (tgtName.Length > 27 ? tgtName[..24] + "..." : tgtName)
-                    : atkStr;
-                Console.SetCursorPosition(17, 2);
-                Console.ForegroundColor = autoAttack ? ConsoleColor.Red : ConsoleColor.DarkGray;
-                Console.Write(combatLine.PadRight(41));
+                // Training points
+                if (trainingVal >= 0)
+                    Console.Write($"TRN:{trainingVal,-3}");
+                else
+                    Console.Write("       ");
+
                 Console.ResetColor();
             }
         }
@@ -847,7 +1314,6 @@ namespace Meridian59.TuiClient
         {
             if (!HasTty) return;
             var ri = Data.RoomInformation;
-            var avatar = Data.AvatarObject;
 
             lock (consoleLock)
             {
@@ -857,12 +1323,123 @@ namespace Meridian59.TuiClient
                 string roomName = ri?.RoomName ?? "Unknown Room";
                 if (roomName.Length > 41) roomName = roomName[..38] + "...";
                 Console.Write($"{roomName,-41}");
+                Console.ResetColor();
+            }
+        }
 
-                // Clear right section cols 60-78 (formerly held Tile overflow)
-                Console.SetCursorPosition(60, 1);
-                Console.ForegroundColor = ConsoleColor.Gray;
-                Console.Write(new string(' ', 19));
+        // ── Buff bar ──────────────────────────────────────────────────────────────
 
+        // Maps buff Name (English, lowercase) → (abbreviation, fg, bg)
+        // School colors: Kraanan=DarkBlue/Navy  Qor=Black/DarkGray  Faren=Red/DarkRed
+        //                Jala=Green  Shalille=White/Gray  Riija=Magenta
+        private static readonly (ConsoleColor fg, ConsoleColor bg) SchoolKraanan  = (ConsoleColor.White,   ConsoleColor.DarkBlue);
+        private static readonly (ConsoleColor fg, ConsoleColor bg) SchoolQor      = (ConsoleColor.Gray,    ConsoleColor.DarkGray);
+        private static readonly (ConsoleColor fg, ConsoleColor bg) SchoolFaren    = (ConsoleColor.White,   ConsoleColor.DarkRed);
+        private static readonly (ConsoleColor fg, ConsoleColor bg) SchoolJala     = (ConsoleColor.Black,   ConsoleColor.Green);
+        private static readonly (ConsoleColor fg, ConsoleColor bg) SchoolShalille = (ConsoleColor.Black,   ConsoleColor.Gray);
+        private static readonly (ConsoleColor fg, ConsoleColor bg) SchoolRiija    = (ConsoleColor.White,   ConsoleColor.DarkMagenta);
+        private static readonly (ConsoleColor fg, ConsoleColor bg) SchoolUnknown  = (ConsoleColor.Black,   ConsoleColor.DarkGray);
+
+        private static readonly Dictionary<string, (string abbr, ConsoleColor fg, ConsoleColor bg)> BuffInfo
+            = new(StringComparer.OrdinalIgnoreCase)
+        {
+            // Kraanan
+            { "bless",                    ("BL",  SchoolKraanan.fg,  SchoolKraanan.bg) },
+            { "super strength",           ("SS",  SchoolKraanan.fg,  SchoolKraanan.bg) },
+            { "haste",                    ("HS",  SchoolKraanan.fg,  SchoolKraanan.bg) },
+            { "free action",              ("FA",  SchoolKraanan.fg,  SchoolKraanan.bg) },
+            { "deflect",                  ("DF",  SchoolKraanan.fg,  SchoolKraanan.bg) },
+            { "magic shield",             ("MS",  SchoolKraanan.fg,  SchoolKraanan.bg) },
+            { "armor of gort",            ("AG",  SchoolKraanan.fg,  SchoolKraanan.bg) },
+            { "night vision",             ("NV",  SchoolKraanan.fg,  SchoolKraanan.bg) },
+            { "eagle eyes",               ("EE",  SchoolKraanan.fg,  SchoolKraanan.bg) },
+            { "detect invisible",         ("DI",  SchoolKraanan.fg,  SchoolKraanan.bg) },
+            { "greater detect invisible", ("GD",  SchoolKraanan.fg,  SchoolKraanan.bg) },
+            { "resist magic",             ("RM",  SchoolKraanan.fg,  SchoolKraanan.bg) },
+            { "resist poison",            ("RP",  SchoolKraanan.fg,  SchoolKraanan.bg) },
+            // Qor
+            { "invisibility",             ("IN",  SchoolQor.fg,      SchoolQor.bg) },
+            { "cloak",                    ("CL",  SchoolQor.fg,      SchoolQor.bg) },
+            { "shadow form",              ("SF",  SchoolQor.fg,      SchoolQor.bg) },
+            { "acid touch",               ("AT",  SchoolQor.fg,      SchoolQor.bg) },
+            { "unholy touch",             ("UT",  SchoolQor.fg,      SchoolQor.bg) },
+            { "kara'hol's curse",         ("KC",  SchoolQor.fg,      SchoolQor.bg) },
+            { "gaze of the basilisk",     ("GB",  SchoolQor.fg,      SchoolQor.bg) },
+            { "death link",               ("DL",  SchoolQor.fg,      SchoolQor.bg) },
+            { "detect good",              ("DG",  SchoolQor.fg,      SchoolQor.bg) },
+            { "unholy resolve",           ("UR",  SchoolQor.fg,      SchoolQor.bg) },
+            // Faren
+            { "touch of flame",           ("TF",  SchoolFaren.fg,    SchoolFaren.bg) },
+            { "icy fingers",              ("IF",  SchoolFaren.fg,    SchoolFaren.bg) },
+            { "zap",                      ("ZP",  SchoolFaren.fg,    SchoolFaren.bg) },
+            { "withstand fire",           ("WF",  SchoolFaren.fg,    SchoolFaren.bg) },
+            { "resist cold",              ("RC",  SchoolFaren.fg,    SchoolFaren.bg) },
+            { "resist shock",             ("RS",  SchoolFaren.fg,    SchoolFaren.bg) },
+            { "mana focus",               ("MF",  SchoolFaren.fg,    SchoolFaren.bg) },
+            // Shalille
+            { "holy touch",               ("HT",  SchoolShalille.fg, SchoolShalille.bg) },
+            { "resist acid",              ("RA",  SchoolShalille.fg, SchoolShalille.bg) },
+            { "holy resolve",             ("HR",  SchoolShalille.fg, SchoolShalille.bg) },
+            { "detect evil",              ("DE",  SchoolShalille.fg, SchoolShalille.bg) },
+            // Riija
+            { "denial",                   ("DN",  SchoolRiija.fg,    SchoolRiija.bg) },
+            { "anonymity",                ("AN",  SchoolRiija.fg,    SchoolRiija.bg) },
+            { "eavesdrop",                ("EV",  SchoolRiija.fg,    SchoolRiija.bg) },
+        };
+
+        private static (string abbr, ConsoleColor fg, ConsoleColor bg) GetBuffInfo(string name)
+        {
+            if (name == null) return ("??", SchoolUnknown.fg, SchoolUnknown.bg);
+            if (BuffInfo.TryGetValue(name, out var info)) return info;
+            // Unknown buff — use first 2 chars, unknown color
+            string abbr = name.Length >= 2 ? name[..2].ToUpper() : name.ToUpper().PadRight(2);
+            return (abbr, SchoolUnknown.fg, SchoolUnknown.bg);
+        }
+
+        public void DrawBuffs()
+        {
+            if (!HasTty) return;
+            lock (consoleLock)
+            {
+                // 3 rows × 19 cols at cols 60-78, rows 1-3
+                // Each token "[AB]" = 4 chars → 4 tokens per row (16 used) + 3 blank
+                const int COL       = 60;
+                const int ROW_START = 1;
+                const int ROWS      = 3;
+                const int ROW_W     = 19;
+                const int TOKEN_W   = 4;
+                const int PER_ROW   = ROW_W / TOKEN_W; // 4
+
+                var tokens = Data.AvatarBuffs.ToList()
+                    .GroupBy(b => b.Name, StringComparer.OrdinalIgnoreCase)
+                    .Select(g => GetBuffInfo(g.Key))
+                    .ToList();
+
+                for (int row = 0; row < ROWS; row++)
+                {
+                    Console.SetCursorPosition(COL, ROW_START + row);
+                    int written = 0;
+                    for (int slot = 0; slot < PER_ROW; slot++)
+                    {
+                        int idx = row * PER_ROW + slot;
+                        if (idx < tokens.Count)
+                        {
+                            var (abbr, fg, bg) = tokens[idx];
+                            Console.ForegroundColor = fg;
+                            Console.BackgroundColor = bg;
+                            Console.Write($"[{abbr,2}]");
+                        }
+                        else
+                        {
+                            Console.ResetColor();
+                            Console.Write("    "); // blank slot
+                        }
+                        written += TOKEN_W;
+                    }
+                    // Pad remaining 3 chars (19 - 16)
+                    Console.ResetColor();
+                    Console.Write(new string(' ', ROW_W - written));
+                }
                 Console.ResetColor();
             }
         }
@@ -899,29 +1476,52 @@ namespace Meridian59.TuiClient
                         if (bufferIdx >= 0 && bufferIdx < buffer.Count)
                         {
                             var entry = buffer[bufferIdx];
-                            // hh:mm tt (8 chars) + space = 9 chars
-                            string timeStr = entry.Timestamp.ToString("hh:mm:ss");
-                            Console.ForegroundColor = ConsoleColor.Gray;
-                            Console.Write($"{timeStr,-9}");
+
+                            if (entry.IsContinuation)
+                            {
+                                // No timestamp/type — indent to align with content column of the
+                                // previous first-line.  We don't know the parent type width here,
+                                // so use a fixed indent matching the minimum prefix (time+space = 9).
+                                int indent = 9; // matches time(8)+space(1); type omitted
+                                Console.ForegroundColor = ConsoleColor.DarkGray;
+                                Console.Write(new string(' ', indent));
+                                Console.ResetColor();
+                                int contentW = Math.Max(1, logWidth - indent);
+                                if (entry.Styles != null)
+                                    WriteStyledString(entry.Text, entry.Styles, contentW);
+                                else
+                                    Console.Write(SafeLine(entry.Text.PadRight(contentW), contentW));
+                            }
+                            else
+                            {
+                            // hh:mm:ss (8 chars) + space = 9 chars
+                            string timeStr = entry.Timestamp.ToString("HH:mm:ss");
+                            Console.ForegroundColor = ConsoleColor.DarkGray;
+                            Console.Write($"{timeStr} ");
 
                             switch (entry.Type)
                             {
                                 case "CHAT":  Console.ForegroundColor = ConsoleColor.Green; break;
-                                case "SYS":   Console.ForegroundColor = ConsoleColor.Cyan; break;
+                                case "EMOTE": Console.ForegroundColor = ConsoleColor.Yellow; break;
+                                case "SYS":   Console.ForegroundColor = ConsoleColor.Magenta; break;
                                 case "NET":   Console.ForegroundColor = ConsoleColor.DarkGray; break;
                                 case "RECV":  Console.ForegroundColor = ConsoleColor.Yellow; break;
                                 case "ERROR": Console.ForegroundColor = ConsoleColor.Red; break;
                                 case "DEBUG": Console.ForegroundColor = ConsoleColor.DarkMagenta; break;
                                 default:      Console.ForegroundColor = ConsoleColor.White; break;
                             }
-                            // Type (8 chars) + space = 9 chars
-                            Console.Write($"{entry.Type,-9}");
+                            // Type with single trailing space — no fixed padding
+                            Console.Write($"{entry.Type} ");
                             Console.ResetColor();
 
-                            // Content (max 60 chars)
-                            string content = entry.Text;
-                            const int avail = 60; 
-                            Console.Write(SafeLine(content.PadRight(avail), avail));
+                            // Content fills remaining width
+                            int usedCols = 9 + entry.Type.Length + 1; // time(9) + type + space
+                            int contentW = Math.Max(1, logWidth - usedCols);
+                            if (entry.Styles != null)
+                                WriteStyledString(entry.Text, entry.Styles, contentW);
+                            else
+                                Console.Write(SafeLine(entry.Text.PadRight(contentW), contentW));
+                            }
                         }
                         else
                         {
@@ -938,14 +1538,17 @@ namespace Meridian59.TuiClient
 
             if (Type == "DEBUG" && HasTty) return;
 
-            // Total line = 9 (time) + 9 (type) + 60 (content) = 78. Fits perfectly in left panel.
-            const int avail = 60;
+            // time(9) + longest-type("ERROR"=5) + space(1) = 15; content width = 78 - 15 = 63
+            const int avail = 63;
             string sanitized = Text.Replace('\n', ' ').Replace('\r', ' ').Replace('\t', ' ');
 
-            var buffer = (Type == "RECV" || Type == "SEND") ? netBuffer : logBuffer;
+            // Chat tab shows only CHAT/EMOTE/SYS/ERROR/REC; everything else goes to network tab
+            var chatTypes = new HashSet<string> { "CHAT", "EMOTE", "SYS", "ERROR", "REC" };
+            var buffer = chatTypes.Contains(Type) ? logBuffer : netBuffer;
 
             lock (logLock)
             {
+                bool isFirst = true;
                 while (sanitized.Length > 0)
                 {
                     string chunk;
@@ -969,7 +1572,10 @@ namespace Meridian59.TuiClient
                         }
                     }
                     if (!string.IsNullOrWhiteSpace(chunk))
-                        buffer.Add(new LogEntry(Type, chunk.TrimEnd()));
+                    {
+                        buffer.Add(new LogEntry(Type, chunk.TrimEnd(), null, 0, !isFirst));
+                        isFirst = false;
+                    }
                 }
 
                 if (buffer.Count > LOG_CAPACITY)
@@ -985,7 +1591,72 @@ namespace Meridian59.TuiClient
                 if (shouldRedraw) DrawLog();
             }
         }
-        // ── Map ──────────────────────────────────────────────────────────────────
+
+        /// <summary>Like Log() but preserves ChatStyle list for colored rendering in DrawLog.</summary>
+        private void LogStyled(string type, string text, List<ChatStyle> styles)
+        {
+            if (styles == null) { Log(type, text); return; }
+
+            const int avail = 63;
+            var chatTypes = new HashSet<string> { "CHAT", "EMOTE", "SYS", "ERROR", "REC" };
+            var buffer = chatTypes.Contains(type) ? logBuffer : netBuffer;
+
+            // Word-wrap; carry styles along with each chunk via offset
+            string remaining = text;
+            int offset = 0;
+            lock (logLock)
+            {
+                bool isFirst = true;
+                while (remaining.Length > 0)
+                {
+                    string chunk;
+                    int chunkLen;
+                    if (remaining.Length <= avail)
+                    {
+                        chunk = remaining;
+                        chunkLen = remaining.Length;
+                        remaining = "";
+                    }
+                    else
+                    {
+                        int cut = remaining.LastIndexOf(' ', avail);
+                        if (cut <= 0) cut = avail;
+                        chunk = remaining[..cut].TrimEnd();
+                        chunkLen = cut;
+                        remaining = remaining[cut..].TrimStart();
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(chunk))
+                    {
+                        // Slice styles that overlap this chunk, adjusted to chunk-local indices
+                        var chunkStyles = new List<ChatStyle>();
+                        foreach (var s in styles)
+                        {
+                            int sStart = s.StartIndex - offset;
+                            int sEnd   = sStart + s.Length;
+                            if (sEnd <= 0 || sStart >= chunk.Length) continue;
+                            int clampStart = Math.Max(0, sStart);
+                            int clampLen   = Math.Min(chunk.Length, sEnd) - clampStart;
+                            if (clampLen <= 0) continue;
+                            chunkStyles.Add(new ChatStyle(clampStart, clampLen, s.IsBold, s.IsCursive, s.IsUnderline, s.IsStrikeout, s.IsLink, s.Color));
+                        }
+                        buffer.Add(new LogEntry(type, chunk.TrimEnd(), chunkStyles.Count > 0 ? chunkStyles : null, 0, !isFirst));
+                        isFirst = false;
+                    }
+                    offset += chunkLen;
+                }
+
+                if (buffer.Count > LOG_CAPACITY) buffer.RemoveAt(0);
+            }
+
+            if (HasTty)
+            {
+                bool shouldRedraw = false;
+                if (activeTab == LogTab.Chat && buffer == logBuffer && scrollOffset == 0) shouldRedraw = true;
+                if (activeTab == LogTab.Network && buffer == netBuffer && netScrollOffset == 0) shouldRedraw = true;
+                if (shouldRedraw) DrawLog();
+            }
+        }
 
         public void DrawMap()
         {
@@ -1005,31 +1676,32 @@ namespace Meridian59.TuiClient
                 Console.SetCursorPosition(79, 1);
                 Console.Write("║ ║");
 
-                // Draw Map Header: MapStatus on the left, X/Y/Tile right-aligned
+                // Draw Map Header: MapStatus left, ATK/TGT right-justified
                 Console.SetCursorPosition(startX, 1);
                 var mapAvatar = Data.AvatarObject;
-                string coordStr = "";
-                if (mapAvatar != null)
-                {
-                    float tileCol = (float)(mapAvatar.Position3D.X - 64.0);
-                    float tileRow = (float)(mapAvatar.Position3D.Z - 64.0);
-                    coordStr = $" X:{mapAvatar.CoordinateX,4} Y:{mapAvatar.CoordinateY,4}  Tile:{tileCol,4:F1},{tileRow,4:F1}";
-                }
                 int availW = width - 1;
                 string mapStatus = renderer.MapStatus;
+
+                // ATK/DRAIN/TGT right-justified in the same row
+                string tgtName2 = Data.TargetObject?.Name ?? "";
+                string atkStr2 = autoAttack ? "[ATK:ON]" : "[ATK:OFF]";
+                string drainStr = drainUnbound ? $"[DRAIN:{drainUnboundSpellName}]" : "";
+                string statusRight = drainStr.Length > 0 ? $"{atkStr2} {drainStr}" : atkStr2;
+                if (tgtName2.Length > 0) statusRight += $" TGT:{tgtName2}";
+                // Truncate if needed so it doesn't eat the whole row
+                int maxRight = availW / 2;
+                if (statusRight.Length > maxRight) statusRight = statusRight[..maxRight];
+
                 string headerLine;
-                if (coordStr.Length == 0 || availW <= coordStr.Length)
-                {
-                    headerLine = mapStatus.Length > availW ? mapStatus[..availW] : mapStatus.PadRight(availW);
-                }
-                else
-                {
-                    int leftW = availW - coordStr.Length;
-                    string leftPart = mapStatus.Length > leftW ? mapStatus[..leftW] : mapStatus.PadRight(leftW);
-                    headerLine = leftPart + coordStr;
-                }
+                int leftW2 = availW - statusRight.Length;
+                string leftPart2 = mapStatus.Length > leftW2 ? mapStatus[..leftW2] : mapStatus.PadRight(leftW2);
+                headerLine = leftPart2 + statusRight;
+
+                // Override right portion color: red if attacking, cyan if draining, gray otherwise
                 Console.ForegroundColor = ConsoleColor.Cyan;
-                Console.Write(headerLine);
+                Console.Write(leftPart2);
+                Console.ForegroundColor = autoAttack ? ConsoleColor.Red : (drainUnbound ? ConsoleColor.Cyan : ConsoleColor.DarkGray);
+                Console.Write(statusRight);
                 Console.ResetColor();
 
                 if (activePopup != PopupMode.None)
@@ -1040,22 +1712,124 @@ namespace Meridian59.TuiClient
                 {
                     if (popupJustClosed)
                     {
-                        // Physically blank the entire inner map area so the differential
-                        // renderer doesn't leave popup text in cells it thinks are already ' '
+                        // Blank the entire console so no popup remnants survive in any panel.
+                        // Then force a full redraw of every panel.
                         Console.BackgroundColor = ConsoleColor.Black;
                         Console.ForegroundColor = ConsoleColor.Gray;
-                        string blank = new string(' ', width - 2);
-                        for (int row = startY + 1; row < startY + height - 1; row++)
+                        string blankLine = new string(' ', Console.WindowWidth);
+                        for (int row = 0; row < Console.WindowHeight - 1; row++)
                         {
-                            Console.SetCursorPosition(startX + 1, row);
-                            Console.Write(blank);
+                            Console.SetCursorPosition(0, row);
+                            Console.Write(blankLine);
                         }
                         renderer.Invalidate();
                         popupJustClosed = false;
+
+                        // Repaint all panels
+                        DrawChrome();
+                        DrawStats();
+                        DrawRoomInfo();
+                        DrawBuffs();
+                        DrawLog();
                     }
                     renderer.Render(this, startX + 1, startY + 1, width - 2, height - 2);
                 }
+
+                if (showWhoList) DrawWhoList();
             }
+        }
+
+        private void DrawWhoList()
+        {
+            int mapStartX = 82;
+            int mapStartY = 5;
+            int w = Console.WindowWidth;
+            int h = Console.WindowHeight;
+            int mapWidth  = w - mapStartX - 2;
+            int mapHeight = h - 4 - mapStartY;
+            if (mapWidth < 16 || mapHeight < 3) return;
+
+            // Panel: right-edge is w-2 (border col), stop 1 before → rightmost content col = w-3
+            // Width of overlay: fit longest entry up to 24 chars + 2 border cols
+            const int maxNameW = 24;
+            int panelW = maxNameW + 2; // including side borders
+
+            // Clamp so we don't spill into the map left edge or past right border
+            int rightEdge = w - 3;          // one col before the terminal right border
+            int panelX = rightEdge - panelW + 1;
+            if (panelX < mapStartX + 1) { panelW = rightEdge - mapStartX; panelX = mapStartX + 1; }
+            int contentW = panelW - 2;
+
+            // Build player list: deduplicate by ID (server sometimes sends duplicates), collect in-room names
+            var seen = new HashSet<uint>();
+            var players = Data.OnlinePlayers
+                .Where(p => seen.Add(p.ID))
+                .ToList();
+
+            var roomNames = new HashSet<string>(
+                Data.RoomObjects.Where(o => o.Flags.IsPlayer && !o.IsAvatar).Select(o => o.Name ?? ""),
+                StringComparer.OrdinalIgnoreCase);
+
+            int maxRows = mapHeight - 2; // leave row for header + bottom border
+            int panelH = Math.Min(players.Count + 2, maxRows + 2); // header + entries + bottom
+            int panelY = mapStartY + 1; // just inside the map top border
+
+            // Draw panel — floats over the map (no lock needed, called from within DrawMap's lock)
+            // Top border with title
+            string title = $"─ WHO ({players.Count}) ";
+            int titlePad = contentW - title.Length;
+            if (titlePad < 0) { title = title[..contentW]; titlePad = 0; }
+            Console.SetCursorPosition(panelX, panelY);
+            Console.ForegroundColor = ConsoleColor.DarkCyan;
+            Console.BackgroundColor = ConsoleColor.Black;
+            Console.Write("┌" + title + new string('─', titlePad) + "┐");
+
+            int entryRows = panelH - 2;
+            for (int i = 0; i < entryRows; i++)
+            {
+                Console.SetCursorPosition(panelX, panelY + 1 + i);
+                Console.ForegroundColor = ConsoleColor.DarkCyan;
+                Console.BackgroundColor = ConsoleColor.Black;
+                Console.Write("│");
+
+                if (i < players.Count)
+                {
+                    var p = players[i];
+                    bool inRoom = roomNames.Contains(p.Name ?? "");
+
+                    // Name color by lawful status
+                    ConsoleColor fg;
+                    switch (p.Flags.Player)
+                    {
+                        case ObjectFlags.PlayerType.Killer: fg = ConsoleColor.Magenta;   break; // pink/red
+                        case ObjectFlags.PlayerType.Outlaw: fg = ConsoleColor.DarkYellow; break; // orange
+                        default:                             fg = ConsoleColor.White;      break; // lawful
+                    }
+                    ConsoleColor bg = inRoom ? ConsoleColor.DarkBlue : ConsoleColor.Black;
+
+                    Console.ForegroundColor = fg;
+                    Console.BackgroundColor = bg;
+                    string name = (p.Name ?? "?");
+                    if (name.Length > contentW) name = name[..contentW];
+                    Console.Write(name.PadRight(contentW));
+                }
+                else
+                {
+                    Console.Write(new string(' ', contentW));
+                }
+
+                Console.ForegroundColor = ConsoleColor.DarkCyan;
+                Console.BackgroundColor = ConsoleColor.Black;
+                Console.Write("│");
+            }
+
+            // Bottom border
+            Console.SetCursorPosition(panelX, panelY + panelH - 1);
+            Console.ForegroundColor = ConsoleColor.DarkCyan;
+            Console.BackgroundColor = ConsoleColor.Black;
+            Console.Write("└" + new string('─', contentW) + "┘");
+
+            Console.ResetColor();
         }
 
         private List<Mail> GetValidMails()
@@ -1147,6 +1921,7 @@ namespace Meridian59.TuiClient
             }
             if (nearest != null)
             {
+                Data.SelfTarget = false;
                 Data.TargetID = nearest.ID;
                 FaceTarget(nearest);
                 Log("SYS", $"Auto-targeted: {nearest.Name}");
@@ -1283,17 +2058,21 @@ namespace Meridian59.TuiClient
             var items = Data.InventoryObjects.ToList().OrderBy(o => o.Name).ToList();
             charSelectionIndex = Math.Clamp(charSelectionIndex, 0, Math.Max(0, items.Count - 1));
 
-            var rows = new List<(string text, ConsoleColor color)>();
+            var rows = new List<(string text, bool equipped)>();
             foreach (var obj in items)
             {
-                bool equipped = obj.Flags.IsEquipped;
-                string suffix = equipped ? " [E]" : "";
+                bool equipped = obj.IsInUse;
                 string line = obj.Count > 0
-                    ? $"{obj.Name,-28} x{obj.Count,4}{suffix}"
-                    : $"{obj.Name}{suffix}";
-                rows.Add((line, equipped ? ConsoleColor.Yellow : ConsoleColor.Gray));
+                    ? $"{obj.Name,-28} x{obj.Count,4}"
+                    : $"{obj.Name}";
+                rows.Add((line, equipped));
             }
-            if (rows.Count == 0) { rows.Add(("  (Empty)", ConsoleColor.DarkGray)); RenderScrollableRows(rows, contentX, contentY, contentW, contentH); return; }
+            if (rows.Count == 0)
+            {
+                var empty = new List<(string, ConsoleColor)> { ("  (Empty)", ConsoleColor.DarkGray) };
+                RenderScrollableRows(empty, contentX, contentY, contentW, contentH);
+                return;
+            }
 
             // Scroll to keep selection visible
             if (charSelectionIndex < charScrollOffset) charScrollOffset = charSelectionIndex;
@@ -1306,9 +2085,21 @@ namespace Meridian59.TuiClient
                 Console.SetCursorPosition(contentX, contentY + i);
                 if (idx < rows.Count)
                 {
-                    bool sel = idx == charSelectionIndex;
-                    Console.ForegroundColor = sel ? ConsoleColor.Black : rows[idx].color;
-                    Console.BackgroundColor = sel ? ConsoleColor.Gray  : ConsoleColor.Black;
+                    bool sel      = idx == charSelectionIndex;
+                    bool equipped = rows[idx].equipped;
+                    // Colour scheme mirrors original clientd3d yellow-highlight for equipped items:
+                    //   equipped + selected   → black on yellow
+                    //   equipped + unselected → white on dark yellow
+                    //   normal  + selected    → black on gray
+                    //   normal  + unselected  → gray on black
+                    Console.ForegroundColor = (sel && equipped) ? ConsoleColor.Black
+                                            : (!sel && equipped) ? ConsoleColor.White
+                                            : sel                ? ConsoleColor.Black
+                                                                 : ConsoleColor.Gray;
+                    Console.BackgroundColor = (sel && equipped) ? ConsoleColor.Yellow
+                                            : (!sel && equipped) ? ConsoleColor.DarkYellow
+                                            : sel                ? ConsoleColor.Gray
+                                                                 : ConsoleColor.Black;
                     Console.Write(SafeLine(rows[idx].text.PadRight(contentW), contentW));
                     Console.ResetColor();
                 }
@@ -1338,7 +2129,7 @@ namespace Meridian59.TuiClient
 
             // Bottom border with centred footer hint
             string footerText = charTab == CharTab.Spells   ? " [Esc:Close] [←/→:Tab] [↑↓:Select] [Enter:Cast] " :
-                                charTab == CharTab.Inventory ? " [Esc:Close] [←/→:Tab] [↑↓:Select] [Enter:Use] " :
+                                charTab == CharTab.Inventory ? " [Esc:Close] [←/→:Tab] [↑↓:Select] [Enter:Use] [D:Drop] [L:Look] " :
                                                                " [Esc:Close] [←/→:Tab] [↑↓:Scroll] ";
             if (footerText.Length > width - 4) footerText = footerText[..(width - 4)];
             int flPad = (width - 2 - footerText.Length) / 2;
@@ -1440,7 +2231,7 @@ namespace Meridian59.TuiClient
             string vendor = buy?.TradePartner?.Name ?? "Merchant";
 
             int dlgW = Math.Min(64, Console.WindowWidth - 4);
-            int dlgH = Math.Min(items.Count + 8, Console.WindowHeight - 4);
+            int dlgH = Math.Min(items.Count + 9, Console.WindowHeight - 4);
             int dlgX = (Console.WindowWidth - dlgW) / 2;
             int dlgY = Math.Max(1, (Console.WindowHeight - dlgH) / 2);
 
@@ -1467,28 +2258,36 @@ namespace Meridian59.TuiClient
             Console.Write("╚" + new string('═', fp / 2) + footer + new string('═', fp - fp / 2) + "╝");
             Console.ResetColor();
 
+            // Shillings line
+            Console.ForegroundColor = ConsoleColor.Yellow;
+            string moneyStr = $" You have: {Data.Money} shillings ";
+            if (moneyStr.Length > dlgW - 2) moneyStr = moneyStr[..(dlgW - 2)];
+            Console.SetCursorPosition(dlgX + 1, dlgY + 1);
+            Console.Write(moneyStr.PadRight(dlgW - 2));
+            Console.ResetColor();
+
             // Column headers
             int cx = dlgX + 2, cw = dlgW - 4;
-            Console.SetCursorPosition(cx, dlgY + 1);
+            Console.SetCursorPosition(cx, dlgY + 2);
             Console.ForegroundColor = ConsoleColor.DarkGray;
             Console.Write($"  {"Item",-32} {"Price",8}".PadRight(cw));
             Console.ResetColor();
 
             // Separator
-            Console.SetCursorPosition(dlgX, dlgY + 2);
+            Console.SetCursorPosition(dlgX, dlgY + 3);
             Console.ForegroundColor = ConsoleColor.Yellow;
             Console.Write("╠" + new string('═', dlgW - 2) + "╣");
             Console.ResetColor();
 
             // Item rows
-            int listH = dlgH - 4;
+            int listH = dlgH - 5;
             int scrollOffset = Math.Max(0, buySelectedIndex - listH + 1);
             for (int i = 0; i < listH && (i + scrollOffset) < items.Count; i++)
             {
                 int idx = i + scrollOffset;
                 var item = items[idx];
                 bool sel = idx == buySelectedIndex;
-                Console.SetCursorPosition(cx, dlgY + 3 + i);
+                Console.SetCursorPosition(cx, dlgY + 4 + i);
                 if (sel) Console.BackgroundColor = ConsoleColor.DarkBlue;
                 Console.ForegroundColor = sel ? ConsoleColor.White : ConsoleColor.Gray;
 
@@ -1623,7 +2422,7 @@ namespace Meridian59.TuiClient
                 Console.SetCursorPosition(dlgX, dlgY + i);
                 Console.Write("║" + new string(' ', dlgW - 2) + "║");
             }
-            string footer = " [↑↓:Select] [Tab:Inv/Room] [Enter:Cast] [Esc:Cancel] ";
+            string footer = " [↑↓:Select] [Tab:Inv/Room] [Enter:Cast] [S:Self] [Esc:Cancel] ";
             int fp = dlgW - 2 - footer.Length; if (fp < 0) { footer = footer[..(dlgW - 2)]; fp = 0; }
             Console.SetCursorPosition(dlgX, dlgY + dlgH - 1);
             Console.Write("╚" + new string('═', fp / 2) + footer + new string('═', fp - fp / 2) + "╝");
@@ -1661,6 +2460,187 @@ namespace Meridian59.TuiClient
                 Console.SetCursorPosition(cx, dlgY + 3);
                 Console.ForegroundColor = ConsoleColor.DarkGray;
                 Console.Write("  (no targets available)".PadRight(cw));
+                Console.ResetColor();
+            }
+        }
+
+        // ── Look List popup ───────────────────────────────────────────────────────
+        private void DrawLookListPopup(int startX, int startY, int width, int height)
+        {
+            // Re-filter live so objects that left the room are removed
+            var liveIDs = new HashSet<uint>(Data.RoomObjects.Select(o => o.ID));
+            lookCandidates = lookCandidates.Where(o => liveIDs.Contains(o.ID)).ToList();
+            if (lookCandidates.Count == 0) { activePopup = PopupMode.None; popupJustClosed = true; DrawMap(); return; }
+            var candidates = lookCandidates;
+            int dlgW = Math.Min(50, Console.WindowWidth - 4);
+            int dlgH = Math.Min(candidates.Count + 6, Console.WindowHeight - 4);
+            int dlgX = (Console.WindowWidth - dlgW) / 2;
+            int dlgY = Math.Max(1, (Console.WindowHeight - dlgH) / 2);
+            lookSelectedIndex = Math.Clamp(lookSelectedIndex, 0, Math.Max(0, candidates.Count - 1));
+
+            Console.ForegroundColor = ConsoleColor.Cyan;
+            Console.SetCursorPosition(dlgX, dlgY);
+            Console.Write("╔" + new string('═', dlgW - 2) + "╗");
+            string title = " Look at what? ";
+            Console.SetCursorPosition(dlgX + (dlgW - title.Length) / 2, dlgY);
+            Console.Write(title);
+            for (int i = 1; i < dlgH - 1; i++)
+            {
+                Console.SetCursorPosition(dlgX, dlgY + i);
+                Console.Write("║" + new string(' ', dlgW - 2) + "║");
+            }
+            string footer = " [↑↓:Select] [Enter:Look] [Esc:Cancel] ";
+            int fp = dlgW - 2 - footer.Length; if (fp < 0) { footer = footer[..(dlgW-2)]; fp = 0; }
+            Console.SetCursorPosition(dlgX, dlgY + dlgH - 1);
+            Console.Write("╚" + new string('═', fp / 2) + footer + new string('═', fp - fp / 2) + "╝");
+            Console.ResetColor();
+
+            int listH = dlgH - 2;
+            int scrollOffset = Math.Max(0, lookSelectedIndex - listH + 1);
+            for (int i = 0; i < listH && (i + scrollOffset) < candidates.Count; i++)
+            {
+                int idx = i + scrollOffset;
+                var obj = candidates[idx];
+                bool sel = idx == lookSelectedIndex;
+                Console.SetCursorPosition(dlgX + 2, dlgY + 1 + i);
+                if (sel) Console.BackgroundColor = ConsoleColor.DarkCyan;
+                Console.ForegroundColor = sel ? ConsoleColor.White : ConsoleColor.Gray;
+                string name = obj.Name ?? "???";
+                if (name.Length > dlgW - 4) name = name[..(dlgW - 4)];
+                Console.Write(name.PadRight(dlgW - 4));
+                Console.ResetColor();
+            }
+        }
+
+        // ── Get List popup ────────────────────────────────────────────────────────
+        private void DrawGetListPopup(int startX, int startY, int width, int height)
+        {
+            // Re-filter live against RoomObjects so picked-up items vanish immediately
+            var liveIDs = new HashSet<uint>(Data.RoomObjects.Select(o => o.ID));
+            getCandidates = getCandidates.Where(o => liveIDs.Contains(o.ID)).ToList();
+            if (getCandidates.Count == 0) { activePopup = PopupMode.None; popupJustClosed = true; DrawMap(); return; }
+            var candidates = getCandidates;
+            int dlgW = Math.Min(52, Console.WindowWidth - 4);
+            int dlgH = Math.Min(candidates.Count + 7, Console.WindowHeight - 4);
+            int dlgX = (Console.WindowWidth - dlgW) / 2;
+            int dlgY = Math.Max(1, (Console.WindowHeight - dlgH) / 2);
+            getSelectedIndex = Math.Clamp(getSelectedIndex, 0, Math.Max(0, candidates.Count - 1));
+
+            Console.ForegroundColor = ConsoleColor.Yellow;
+            Console.SetCursorPosition(dlgX, dlgY);
+            Console.Write("╔" + new string('═', dlgW - 2) + "╗");
+            string title = " Get what? ";
+            Console.SetCursorPosition(dlgX + (dlgW - title.Length) / 2, dlgY);
+            Console.Write(title);
+            for (int i = 1; i < dlgH - 1; i++)
+            {
+                Console.SetCursorPosition(dlgX, dlgY + i);
+                Console.Write("║" + new string(' ', dlgW - 2) + "║");
+            }
+            string footer = " [↑↓:Select] [Enter:Get] [A:Get All] [Esc:Cancel] ";
+            int fp = dlgW - 2 - footer.Length; if (fp < 0) { footer = footer[..(dlgW-2)]; fp = 0; }
+            Console.SetCursorPosition(dlgX, dlgY + dlgH - 1);
+            Console.Write("╚" + new string('═', fp / 2) + footer + new string('═', fp - fp / 2) + "╝");
+            Console.ResetColor();
+
+            int listH = dlgH - 2;
+            int scrollOffset = Math.Max(0, getSelectedIndex - listH + 1);
+            for (int i = 0; i < listH && (i + scrollOffset) < candidates.Count; i++)
+            {
+                int idx = i + scrollOffset;
+                var obj = candidates[idx];
+                bool sel = idx == getSelectedIndex;
+                Console.SetCursorPosition(dlgX + 2, dlgY + 1 + i);
+                if (sel) Console.BackgroundColor = ConsoleColor.DarkYellow;
+                Console.ForegroundColor = sel ? ConsoleColor.White : ConsoleColor.Gray;
+                string name = obj.Name ?? "???";
+                if (name.Length > dlgW - 4) name = name[..(dlgW - 4)];
+                Console.Write(name.PadRight(dlgW - 4));
+                Console.ResetColor();
+            }
+        }
+
+        // ── Look Detail popup (uses text panel width, left side) ──────────────────
+        private void DrawLookDetailPopup(int startX, int startY, int width, int height)
+        {
+            string objName, desc, inscription;
+            if (Data.LookPlayer.IsVisible)
+            {
+                var p = Data.LookPlayer;
+                objName = p.ObjectBase?.Name ?? "Player";
+                var parts = new System.Text.StringBuilder();
+                string titles = p.Titles?.FullString ?? "";
+                if (!string.IsNullOrWhiteSpace(titles)) parts.AppendLine(titles).AppendLine();
+                string msg = p.Message?.FullString ?? "";
+                if (!string.IsNullOrWhiteSpace(msg)) parts.AppendLine(msg).AppendLine();
+                string web = p.Website ?? "";
+                if (!string.IsNullOrWhiteSpace(web)) parts.Append("Web: ").AppendLine(web);
+                desc = parts.ToString().TrimEnd();
+                inscription = "";
+            }
+            else
+            {
+                var look = Data.LookObject;
+                objName     = look?.ObjectBase?.Name ?? "Object";
+                desc        = look?.Message?.FullString ?? "";
+                inscription = (look?.LookType?.IsInscribed == true || look?.LookType?.IsEditable == true)
+                    ? look?.Inscription?.FullString ?? "" : "";
+            }
+
+            // Use the left text panel area (cols 0..79, rows 1..height-3)
+            int dlgX = 1;
+            int dlgY = 1;
+            int dlgW = Math.Min(78, Console.WindowWidth - 2);
+            int dlgH = Console.WindowHeight - 3;
+
+            // Word-wrap description into lines
+            var lines = new List<string>();
+            int contentW = dlgW - 4;
+            foreach (var raw in (desc + (inscription.Length > 0 ? "\n\n" + inscription : "")).Split('\n'))
+            {
+                string remaining = raw.TrimEnd();
+                if (remaining.Length == 0) { lines.Add(""); continue; }
+                while (remaining.Length > contentW)
+                {
+                    int cut = remaining.LastIndexOf(' ', contentW);
+                    if (cut <= 0) cut = contentW;
+                    lines.Add(remaining[..cut].TrimEnd());
+                    remaining = remaining[cut..].TrimStart();
+                }
+                if (remaining.Length > 0) lines.Add(remaining);
+            }
+
+            // Clamp to available height
+            int maxLines = dlgH - 4;
+            if (lines.Count > maxLines) lines = lines[..maxLines];
+
+            // Resize dialog to content
+            dlgH = Math.Min(lines.Count + 4, Console.WindowHeight - 3);
+
+            Console.ForegroundColor = ConsoleColor.Cyan;
+            Console.SetCursorPosition(dlgX, dlgY);
+            Console.Write("╔" + new string('═', dlgW - 2) + "╗");
+            string titleStr = $" {objName} ";
+            if (titleStr.Length > dlgW - 4) titleStr = titleStr[..(dlgW - 4)];
+            Console.SetCursorPosition(dlgX + (dlgW - titleStr.Length) / 2, dlgY);
+            Console.Write(titleStr);
+            for (int i = 1; i < dlgH - 1; i++)
+            {
+                Console.SetCursorPosition(dlgX, dlgY + i);
+                Console.Write("║" + new string(' ', dlgW - 2) + "║");
+            }
+            string footer2 = " [Esc/Enter:Close] ";
+            int fp2 = dlgW - 2 - footer2.Length; if (fp2 < 0) { footer2 = footer2[..(dlgW-2)]; fp2 = 0; }
+            Console.SetCursorPosition(dlgX, dlgY + dlgH - 1);
+            Console.Write("╚" + new string('═', fp2 / 2) + footer2 + new string('═', fp2 - fp2 / 2) + "╝");
+            Console.ResetColor();
+
+            // Content lines
+            for (int i = 0; i < lines.Count; i++)
+            {
+                Console.SetCursorPosition(dlgX + 2, dlgY + 1 + i);
+                Console.ForegroundColor = ConsoleColor.White;
+                Console.Write(lines[i].PadRight(contentW));
                 Console.ResetColor();
             }
         }
@@ -1705,6 +2685,236 @@ namespace Meridian59.TuiClient
         }
 
         // ── New Character popup ───────────────────────────────────────────────────
+        // ── Stat Change (Ancient Trinket) Popup ─────────────────────────────────
+
+        private static readonly (string Label, string Short)[] StatChangeStatLabels =
+        {
+            ("Might",     "MGT"), ("Intellect", "INT"), ("Stamina",   "STA"),
+            ("Agility",   "AGL"), ("Mysticism", "MYS"), ("Aim",       "AIM"),
+        };
+
+        private static readonly (string Label, string Short)[] StatChangeSchoolLabels =
+        {
+            ("Shal'ille",   "SHA"), ("Qor",      "QOR"), ("Kraanan",    "KRA"),
+            ("Faren",       "FAR"), ("Riija",     "RIJ"), ("Jala",       "JAL"),
+            ("Weaponcraft", "WC "),
+        };
+
+        private void DrawStatChangePopup(int startX, int startY, int width, int height)
+        {
+            var sc = Data.StatChangeInfo;
+            if (sc == null) return;
+
+            int dlgW = Math.Min(72, Console.WindowWidth - 4);
+            int dlgH = Math.Min(26, Console.WindowHeight - 4);
+            int dlgX = (Console.WindowWidth  - dlgW) / 2;
+            int dlgY = Math.Max(1, (Console.WindowHeight - dlgH) / 2);
+
+            bool isConfirm = (activePopup == PopupMode.StatChangeConfirm);
+
+            // Frame
+            Console.ForegroundColor = ConsoleColor.Cyan;
+            Console.SetCursorPosition(dlgX, dlgY);
+            Console.Write("╔" + new string('═', dlgW - 2) + "╗");
+            string title = isConfirm ? " Confirm Stat Change " : " Ancient Trinket — Redistribute Stats ";
+            Console.SetCursorPosition(dlgX + (dlgW - title.Length) / 2, dlgY);
+            Console.Write(title);
+            for (int i = 1; i < dlgH - 1; i++)
+            {
+                Console.SetCursorPosition(dlgX, dlgY + i);
+                Console.Write("║" + new string(' ', dlgW - 2) + "║");
+            }
+            Console.SetCursorPosition(dlgX, dlgY + dlgH - 1);
+            string footer = isConfirm
+                ? " [Enter:Confirm & Send] [Esc:Go Back] "
+                : " [↑↓:Select] [Enter:Edit] [Tab:Review & Confirm] [Esc:Cancel] ";
+            int fp = dlgW - 2 - footer.Length; if (fp < 0) fp = 0;
+            Console.Write("╚" + new string('═', fp / 2) + footer + new string('═', fp - fp / 2) + "╝");
+            Console.ResetColor();
+
+            int cx = dlgX + 2;
+            int cw = dlgW - 4;
+            int cy = dlgY + 1;
+
+            if (isConfirm)
+            {
+                DrawStatChangeConfirm(cx, cy, cw, dlgH - 2, sc);
+            }
+            else
+            {
+                DrawStatChangeEditor(cx, cy, cw, dlgH - 2, sc);
+            }
+        }
+
+        private void DrawStatChangeEditor(int cx, int cy, int cw, int ch, Meridian59.Data.Models.StatChangeInfo sc)
+        {
+            // Column widths: label(12) value(4) bar(rest)
+            int barW = Math.Max(8, cw - 20);
+
+            // Section header: Stats
+            Console.SetCursorPosition(cx, cy);
+            Console.ForegroundColor = ConsoleColor.Cyan;
+            Console.Write("── Stats ──────────────────────────────".PadRight(cw)[..cw]);
+            Console.ResetColor();
+
+            byte[] statVals = { sc.Might, sc.Intellect, sc.Stamina, sc.Agility, sc.Mysticism, sc.Aim };
+            for (int i = 0; i < statVals.Length; i++)
+            {
+                int row = cy + 1 + i;
+                if (row >= cy + ch - 4) break;
+                Console.SetCursorPosition(cx, row);
+
+                bool sel     = (statChangeSelectedIndex == i);
+                bool editing = (statChangeEditingIndex == i);
+                if (sel) Console.BackgroundColor = ConsoleColor.DarkBlue;
+                Console.ForegroundColor = sel ? ConsoleColor.White : ConsoleColor.Gray;
+
+                string valStr = editing ? (statChangeEditBuffer + "_") : statVals[i].ToString();
+                string bar    = editing ? "" : new string('█', Math.Min(barW, statVals[i] / 2));
+                string row_s  = $"  {StatChangeStatLabels[i].Label,-12} {valStr,-5} {bar}";
+                Console.Write(row_s.PadRight(cw)[..cw]);
+                Console.ResetColor();
+            }
+
+            // Stats footer: points remaining
+            uint avail = sc.AttributesAvailable;
+            int footerRow = cy + 1 + statVals.Length;
+            if (footerRow < cy + ch - 2)
+            {
+                Console.SetCursorPosition(cx, footerRow);
+                Console.ForegroundColor = avail == 0 ? ConsoleColor.Green : ConsoleColor.Yellow;
+                Console.Write($"  Points remaining: {avail,3}  (pool: {Meridian59.Data.Models.StatChangeInfo.ATTRIBUTE_MAXSUM})".PadRight(cw)[..cw]);
+                Console.ResetColor();
+            }
+
+            // Section header: Schools
+            int schoolHeaderRow = footerRow + 1;
+            if (schoolHeaderRow < cy + ch - 1)
+            {
+                Console.SetCursorPosition(cx, schoolHeaderRow);
+                Console.ForegroundColor = ConsoleColor.Cyan;
+                Console.Write("── Schools (can only reduce) ──────────".PadRight(cw)[..cw]);
+                Console.ResetColor();
+            }
+
+            byte[] schoolVals    = { sc.LevelSha, sc.LevelQor, sc.LevelKraanan, sc.LevelFaren, sc.LevelRiija, sc.LevelJala, sc.LevelWC };
+            byte[] schoolOrigMax = { sc.OrigLevelSha, sc.OrigLevelQor, sc.OrigLevelKraanan, sc.OrigLevelFaren, sc.OrigLevelRiija, sc.OrigLevelJala, sc.OrigLevelWC };
+            for (int i = 0; i < schoolVals.Length; i++)
+            {
+                int row = schoolHeaderRow + 1 + i;
+                if (row >= cy + ch) break;
+                Console.SetCursorPosition(cx, row);
+
+                int listIdx  = 6 + i;  // schools start at row index 6
+                bool sel     = (statChangeSelectedIndex == listIdx);
+                bool editing = (statChangeEditingIndex == listIdx);
+                bool locked  = (schoolOrigMax[i] == 0);  // never had this school
+
+                if (locked)
+                {
+                    Console.ForegroundColor = ConsoleColor.DarkGray;
+                    Console.Write($"  {StatChangeSchoolLabels[i].Label,-12} --    (not learned)".PadRight(cw)[..cw]);
+                }
+                else
+                {
+                    if (sel) Console.BackgroundColor = ConsoleColor.DarkBlue;
+                    Console.ForegroundColor = sel ? ConsoleColor.White : ConsoleColor.Gray;
+                    string valStr = editing ? (statChangeEditBuffer + "_") : schoolVals[i].ToString();
+                    string maxStr = $"/{schoolOrigMax[i]}";
+                    string row_s  = $"  {StatChangeSchoolLabels[i].Label,-12} {valStr}{maxStr,-4}";
+                    Console.Write(row_s.PadRight(cw)[..cw]);
+                }
+                Console.ResetColor();
+            }
+        }
+
+        private void DrawStatChangeConfirm(int cx, int cy, int cw, int ch, Meridian59.Data.Models.StatChangeInfo sc)
+        {
+            byte[] statVals = { sc.Might, sc.Intellect, sc.Stamina, sc.Agility, sc.Mysticism, sc.Aim };
+            byte[] schoolVals = { sc.LevelSha, sc.LevelQor, sc.LevelKraanan, sc.LevelFaren, sc.LevelRiija, sc.LevelJala, sc.LevelWC };
+            byte[] schoolOrigMax = { sc.OrigLevelSha, sc.OrigLevelQor, sc.OrigLevelKraanan, sc.OrigLevelFaren, sc.OrigLevelRiija, sc.OrigLevelJala, sc.OrigLevelWC };
+
+            int row = cy;
+            Console.SetCursorPosition(cx, row++);
+            Console.ForegroundColor = ConsoleColor.Yellow;
+            Console.Write("Your token will be consumed. Review changes:".PadRight(cw)[..cw]);
+            Console.ResetColor();
+            row++;
+
+            Console.SetCursorPosition(cx, row++);
+            Console.ForegroundColor = ConsoleColor.Cyan;
+            Console.Write("Stats:".PadRight(cw)[..cw]);
+            Console.ResetColor();
+
+            for (int i = 0; i < statVals.Length; i++)
+            {
+                if (row >= cy + ch - 3) break;
+                Console.SetCursorPosition(cx, row++);
+                Console.ForegroundColor = ConsoleColor.Gray;
+                Console.Write($"  {StatChangeStatLabels[i].Label,-12} {statVals[i],3}".PadRight(cw)[..cw]);
+            }
+            Console.SetCursorPosition(cx, row++);
+            Console.ForegroundColor = ConsoleColor.Green;
+            Console.Write($"  Points used: {sc.AttributesCurrent}/{Meridian59.Data.Models.StatChangeInfo.ATTRIBUTE_MAXSUM}".PadRight(cw)[..cw]);
+            Console.ResetColor();
+            row++;
+
+            if (row < cy + ch - 1)
+            {
+                Console.SetCursorPosition(cx, row++);
+                Console.ForegroundColor = ConsoleColor.Cyan;
+                Console.Write("Schools:".PadRight(cw)[..cw]);
+                Console.ResetColor();
+            }
+
+            for (int i = 0; i < schoolVals.Length; i++)
+            {
+                if (row >= cy + ch) break;
+                if (schoolOrigMax[i] == 0) continue;
+                Console.SetCursorPosition(cx, row++);
+                Console.ForegroundColor = ConsoleColor.Gray;
+                Console.Write($"  {StatChangeSchoolLabels[i].Label,-12} {schoolVals[i]}/{schoolOrigMax[i]}".PadRight(cw)[..cw]);
+            }
+
+            if (row < cy + ch)
+            {
+                Console.SetCursorPosition(cx, row);
+                Console.ForegroundColor = ConsoleColor.Yellow;
+                Console.Write("  Int needed for schools: " + sc.IntellectNeeded);
+                Console.ResetColor();
+            }
+        }
+
+        private void AdjustStatChangeStat(Meridian59.Data.Models.StatChangeInfo sc, int idx, byte val)
+        {
+            switch (idx)
+            {
+                case 0: sc.Might     = val; break;
+                case 1: sc.Intellect = val; break;
+                case 2: sc.Stamina   = val; break;
+                case 3: sc.Agility   = val; break;
+                case 4: sc.Mysticism = val; break;
+                case 5: sc.Aim       = val; break;
+                case 6: sc.LevelSha     = val; break;
+                case 7: sc.LevelQor     = val; break;
+                case 8: sc.LevelKraanan = val; break;
+                case 9: sc.LevelFaren   = val; break;
+                case 10: sc.LevelRiija  = val; break;
+                case 11: sc.LevelJala   = val; break;
+                case 12: sc.LevelWC     = val; break;
+            }
+        }
+
+        private static byte GetSchoolOrigMax(Meridian59.Data.Models.StatChangeInfo sc, int schoolIdx)
+        {
+            return schoolIdx switch
+            {
+                0 => sc.OrigLevelSha, 1 => sc.OrigLevelQor,     2 => sc.OrigLevelKraanan,
+                3 => sc.OrigLevelFaren, 4 => sc.OrigLevelRiija, 5 => sc.OrigLevelJala,
+                6 => sc.OrigLevelWC,  _ => 0,
+            };
+        }
+
         private void DrawNewCharPopup(int startX, int startY, int width, int height)
         {
             var info = Data.CharCreationInfo;
@@ -1949,6 +3159,26 @@ namespace Meridian59.TuiClient
                 DrawSpellTargetPopup(startX, startY, width, height);
                 return;
             }
+            if (activePopup == PopupMode.LookList)
+            {
+                DrawLookListPopup(startX, startY, width, height);
+                return;
+            }
+            if (activePopup == PopupMode.LookDetail)
+            {
+                DrawLookDetailPopup(startX, startY, width, height);
+                return;
+            }
+            if (activePopup == PopupMode.GetList)
+            {
+                DrawGetListPopup(startX, startY, width, height);
+                return;
+            }
+            if (activePopup == PopupMode.StatChange || activePopup == PopupMode.StatChangeConfirm)
+            {
+                DrawStatChangePopup(startX, startY, width, height);
+                return;
+            }
 
             int w = Console.WindowWidth;
             if (startX + width > w - 1) width = w - 1 - startX;
@@ -2189,6 +3419,97 @@ namespace Meridian59.TuiClient
                             SendSystemMessageSendCharInfo(emptySlot.ID);
                         }
                         else Log("SYS", "No empty character slots available.");
+                        break;
+                }
+                return;
+            }
+
+            // ── Stat Change (Ancient Trinket) popup ──────────────────────────────
+            if (activePopup == PopupMode.StatChange || activePopup == PopupMode.StatChangeConfirm)
+            {
+                var sc = Data.StatChangeInfo;
+
+                // ── Confirm screen ──────────────────────────────────────────────
+                if (activePopup == PopupMode.StatChangeConfirm)
+                {
+                    switch (key.Key)
+                    {
+                        case ConsoleKey.Enter:
+                            // Send it
+                            SendChangedStatsMessage();
+                            activePopup = PopupMode.None;
+                            popupJustClosed = true;
+                            Log("SYS", "Stat change submitted.");
+                            DrawMap();
+                            break;
+                        case ConsoleKey.Escape:
+                            activePopup = PopupMode.StatChange;
+                            DrawMap();
+                            break;
+                    }
+                    return;
+                }
+
+                // ── Inline digit-edit mode ──────────────────────────────────────
+                if (statChangeEditingIndex >= 0)
+                {
+                    switch (key.Key)
+                    {
+                        case ConsoleKey.Enter:
+                            if (byte.TryParse(statChangeEditBuffer, out byte v))
+                                AdjustStatChangeStat(sc, statChangeEditingIndex, v);
+                            statChangeEditingIndex = -1;
+                            statChangeEditBuffer   = "";
+                            DrawMap();
+                            break;
+                        case ConsoleKey.Escape:
+                            statChangeEditingIndex = -1;
+                            statChangeEditBuffer   = "";
+                            DrawMap();
+                            break;
+                        case ConsoleKey.Backspace:
+                            if (statChangeEditBuffer.Length > 0) statChangeEditBuffer = statChangeEditBuffer[..^1];
+                            DrawMap();
+                            break;
+                        default:
+                            if (char.IsDigit(key.KeyChar) && statChangeEditBuffer.Length < 3)
+                            { statChangeEditBuffer += key.KeyChar; DrawMap(); }
+                            break;
+                    }
+                    return;
+                }
+
+                // ── Normal navigation ───────────────────────────────────────────
+                const int TOTAL_ROWS = 13; // 6 stats + 7 schools
+                switch (key.Key)
+                {
+                    case ConsoleKey.Escape:
+                        activePopup = PopupMode.None;
+                        popupJustClosed = true;
+                        DrawMap();
+                        break;
+                    case ConsoleKey.UpArrow:
+                        statChangeSelectedIndex = Math.Max(0, statChangeSelectedIndex - 1);
+                        // Skip locked school rows (schools with origMax == 0)
+                        while (statChangeSelectedIndex >= 6 && GetSchoolOrigMax(sc, statChangeSelectedIndex - 6) == 0 && statChangeSelectedIndex > 6)
+                            statChangeSelectedIndex--;
+                        DrawMap();
+                        break;
+                    case ConsoleKey.DownArrow:
+                        statChangeSelectedIndex = Math.Min(TOTAL_ROWS - 1, statChangeSelectedIndex + 1);
+                        while (statChangeSelectedIndex >= 6 && GetSchoolOrigMax(sc, statChangeSelectedIndex - 6) == 0 && statChangeSelectedIndex < TOTAL_ROWS - 1)
+                            statChangeSelectedIndex++;
+                        DrawMap();
+                        break;
+                    case ConsoleKey.Enter:
+                        statChangeEditingIndex = statChangeSelectedIndex;
+                        statChangeEditBuffer   = "";
+                        DrawMap();
+                        break;
+                    case ConsoleKey.Tab:
+                        // Advance to confirm screen
+                        activePopup = PopupMode.StatChangeConfirm;
+                        DrawMap();
                         break;
                 }
                 return;
@@ -2500,6 +3821,7 @@ namespace Meridian59.TuiClient
                         if (items.Count > 0)
                         {
                             var target = items[spellTargetSelectedIndex];
+                            Data.SelfTarget = false;
                             Data.TargetID = target.ID;
                             SendReqCastMessage(spellTargetSpellID);
                             Log("SYS", $"Casting on: {target.Name}");
@@ -2507,6 +3829,102 @@ namespace Meridian59.TuiClient
                             popupJustClosed = true;
                             DrawMap();
                         }
+                        break;
+                    case ConsoleKey.S:
+                        // Cast on self
+                        Data.SelfTarget = true;
+                        SendReqCastMessage(spellTargetSpellID);
+                        Log("SYS", $"Casting on self.");
+                        Data.SelfTarget = false;
+                        activePopup = PopupMode.None;
+                        popupJustClosed = true;
+                        DrawMap();
+                        break;
+                }
+                return;
+            }
+
+            if (activePopup == PopupMode.LookList)
+            {
+                switch (key.Key)
+                {
+                    case ConsoleKey.Escape:
+                        activePopup = PopupMode.None;
+                        popupJustClosed = true;
+                        DrawMap();
+                        break;
+                    case ConsoleKey.UpArrow:
+                        lookSelectedIndex = Math.Max(0, lookSelectedIndex - 1);
+                        DrawMap();
+                        break;
+                    case ConsoleKey.DownArrow:
+                        lookSelectedIndex = Math.Min(lookCandidates.Count - 1, lookSelectedIndex + 1);
+                        DrawMap();
+                        break;
+                    case ConsoleKey.Enter:
+                        if (lookCandidates.Count > 0)
+                        {
+                            var target = lookCandidates[lookSelectedIndex];
+                            activePopup = PopupMode.None;
+                            SendReqLookMessage(target.ID);
+                            // LookDetail will open via PropertyChanged when server responds
+                        }
+                        break;
+                }
+                return;
+            }
+
+            if (activePopup == PopupMode.LookDetail)
+            {
+                // Any key closes it
+                Data.LookObject.IsVisible = false;
+                Data.LookPlayer.IsVisible = false;
+                activePopup = PopupMode.None;
+                popupJustClosed = true;
+                DrawMap();
+                return;
+            }
+
+            if (activePopup == PopupMode.GetList)
+            {
+                switch (key.Key)
+                {
+                    case ConsoleKey.Escape:
+                        activePopup = PopupMode.None;
+                        popupJustClosed = true;
+                        DrawMap();
+                        break;
+                    case ConsoleKey.UpArrow:
+                        getSelectedIndex = Math.Max(0, getSelectedIndex - 1);
+                        DrawMap();
+                        break;
+                    case ConsoleKey.DownArrow:
+                        getSelectedIndex = Math.Min(getCandidates.Count - 1, getSelectedIndex + 1);
+                        DrawMap();
+                        break;
+                    case ConsoleKey.Enter:
+                        if (getCandidates.Count > 0)
+                        {
+                            var obj = getCandidates[getSelectedIndex];
+                            SendReqGetMessage(new ObjectID(obj.ID));
+                            if (recorder.IsRecording) recorder.RecordGet(Data.AvatarObject, obj.Name ?? obj.ID.ToString());
+                            Log("SYS", $"Getting: {obj.Name}");
+                            activePopup = PopupMode.None;
+                            popupJustClosed = true;
+                            DrawMap();
+                        }
+                        break;
+                    case ConsoleKey.A:
+                        // Get all
+                        foreach (var obj in getCandidates)
+                        {
+                            SendReqGetMessage(new ObjectID(obj.ID));
+                            if (recorder.IsRecording) recorder.RecordGet(Data.AvatarObject, obj.Name ?? obj.ID.ToString());
+                        }
+                        Log("SYS", $"Getting all {getCandidates.Count} item(s).");
+                        activePopup = PopupMode.None;
+                        popupJustClosed = true;
+                        DrawMap();
                         break;
                 }
                 return;
@@ -2599,7 +4017,7 @@ namespace Meridian59.TuiClient
                             if (items.Count > 0)
                             {
                                 var item = items[ii];
-                                if (item.Flags.IsEquipped)
+                                if (item.IsInUse)
                                 {
                                     SendReqUnuseMessage(item.ID);
                                     Log("SYS", $"Unequipping: {item.Name}");
@@ -2610,6 +4028,46 @@ namespace Meridian59.TuiClient
                                     Log("SYS", $"Using/equipping: {item.Name}");
                                 }
                                 DrawMap();
+                            }
+                        }
+                        break;
+
+                    case ConsoleKey.D:
+                        if (charTab == CharTab.Inventory)
+                        {
+                            var items = Data.InventoryObjects.ToList().OrderBy(o => o.Name).ToList();
+                            int ii = Math.Clamp(charSelectionIndex, 0, items.Count - 1);
+                            if (items.Count > 0)
+                            {
+                                var item = items[ii];
+                                // Don't drop equipped items without unequipping first
+                                if (item.IsInUse)
+                                {
+                                    Log("SYS", $"Unequip {item.Name} first before dropping.");
+                                }
+                                else
+                                {
+                                    SendReqDropMessage(new ObjectID(item.ID));
+                                    Log("SYS", $"Dropping: {item.Name}");
+                                    // Move selection up if we were at the bottom
+                                    if (charSelectionIndex >= items.Count - 1)
+                                        charSelectionIndex = Math.Max(0, charSelectionIndex - 1);
+                                    DrawMap();
+                                }
+                            }
+                        }
+                        break;
+
+                    case ConsoleKey.L:
+                        if (charTab == CharTab.Inventory)
+                        {
+                            var litems = Data.InventoryObjects.ToList().OrderBy(o => o.Name).ToList();
+                            int li = Math.Clamp(charSelectionIndex, 0, litems.Count - 1);
+                            if (litems.Count > 0)
+                            {
+                                var litem = litems[li];
+                                Log("SYS", $"INV DBG: {litem.Name} IsInUse={litem.IsInUse}");
+                                SendReqLookMessage(litem.ID);
                             }
                         }
                         break;
@@ -2633,6 +4091,8 @@ namespace Meridian59.TuiClient
                     if (activePopup == PopupMode.MailRead) activePopup = PopupMode.MailList;
                     else if (activePopup == PopupMode.NewsRead) activePopup = PopupMode.NewsList;
                     else {
+                        if (activePopup == PopupMode.NewsList)
+                            Data.NewsGroup.IsVisible = false;
                         activePopup = PopupMode.None;
                         popupJustClosed = true;
                     }
@@ -2879,6 +4339,32 @@ namespace Meridian59.TuiClient
 
         protected override void ProcessKeyPress(ConsoleKeyInfo key)
         {
+            // Ctrl+Q always quits, regardless of mode
+            if (key.Key == ConsoleKey.Q && key.Modifiers.HasFlag(ConsoleModifiers.Control))
+            {
+                Log("SYS", "Disconnecting...");
+                ServerConnection.Disconnect("User quit command");
+                IsRunning = false;
+                return;
+            }
+
+            // Ctrl+W toggles the who list overlay
+            if (key.Key == ConsoleKey.W && key.Modifiers.HasFlag(ConsoleModifiers.Control))
+            {
+                showWhoList = !showWhoList;
+                if (showWhoList) SendSendPlayers();
+                DrawMap();
+                return;
+            }
+
+            // Ctrl+S toggles sound/beep
+            if (key.Key == ConsoleKey.S && key.Modifiers.HasFlag(ConsoleModifiers.Control))
+            {
+                soundEnabled = !soundEnabled;
+                Log("SYS", $"Sound {(soundEnabled ? "ON" : "OFF")}");
+                return;
+            }
+
             if (activePopup != PopupMode.None)
             {
                 ProcessPopupKeyPress(key);
@@ -2892,6 +4378,10 @@ namespace Meridian59.TuiClient
                     case ConsoleKey.Enter:
                         if (!string.IsNullOrWhiteSpace(inputBuffer))
                         {
+                            // Add to history (deduplicate consecutive identical commands)
+                            if (commandHistory.Count == 0 || commandHistory[^1] != inputBuffer)
+                                commandHistory.Add(inputBuffer);
+                            historyIndex = -1;
                             ProcessCommand(inputBuffer);
                             inputBuffer = "";
                         }
@@ -2901,14 +4391,43 @@ namespace Meridian59.TuiClient
 
                     case ConsoleKey.Escape:
                         inputBuffer = "";
+                        historyIndex = -1;
                         inputMode = false;
                         DrawInputField();
+                        break;
+
+                    case ConsoleKey.UpArrow:
+                        if (commandHistory.Count > 0)
+                        {
+                            if (historyIndex < 0)
+                                historyIndex = commandHistory.Count - 1;
+                            else if (historyIndex > 0)
+                                historyIndex--;
+                            inputBuffer = commandHistory[historyIndex];
+                            DrawInputField();
+                        }
+                        break;
+
+                    case ConsoleKey.DownArrow:
+                        if (historyIndex >= 0)
+                        {
+                            historyIndex++;
+                            if (historyIndex >= commandHistory.Count)
+                            {
+                                historyIndex = -1;
+                                inputBuffer = "";
+                            }
+                            else
+                                inputBuffer = commandHistory[historyIndex];
+                            DrawInputField();
+                        }
                         break;
 
                     case ConsoleKey.Backspace:
                         if (inputBuffer.Length > 0)
                         {
                             inputBuffer = inputBuffer[..^1];
+                            historyIndex = -1;
                             DrawInputField();
                         }
                         break;
@@ -2917,6 +4436,7 @@ namespace Meridian59.TuiClient
                         if (!char.IsControl(key.KeyChar))
                         {
                             inputBuffer += key.KeyChar;
+                            historyIndex = -1;
                             DrawInputField();
                         }
                         break;
@@ -2935,6 +4455,103 @@ namespace Meridian59.TuiClient
             }
         }
 
+        private void PerformLook()
+        {
+            var avatar = Data.AvatarObject;
+            if (avatar == null) { Log("SYS", "No avatar."); return; }
+
+            // Forward cone filter for room objects.
+            float facingRad = avatar.AngleUnits / 4096f * 2f * MathF.PI;
+            const float VIEW_ARC  = MathF.PI / 2f;
+            const float MAX_DIST  = 512f;
+
+            var candidates = Data.RoomObjects
+                .Where(o =>
+                {
+                    if (o.ID == Data.AvatarID) return false;
+                    float dx = o.CoordinateX - avatar.CoordinateX;
+                    float dz = o.CoordinateY - avatar.CoordinateY;
+                    float dist = MathF.Sqrt(dx * dx + dz * dz);
+                    if (dist > MAX_DIST) return false;
+                    float angleToObj = MathF.Atan2(dz, dx);
+                    return AngleDiff(angleToObj, facingRad) <= VIEW_ARC;
+                })
+                .OrderBy(o => {
+                    float dx = o.CoordinateX - avatar.CoordinateX;
+                    float dz = o.CoordinateY - avatar.CoordinateY;
+                    return dx * dx + dz * dz;
+                })
+                .ToList();
+
+            if (candidates.Count == 0)
+            {
+                Log("SYS", "Nothing nearby to look at.");
+                return;
+            }
+
+            if (candidates.Count == 1)
+            {
+                SendReqLookMessage(candidates[0].ID);
+                return;
+            }
+
+            lookCandidates    = candidates;
+            lookSelectedIndex = 0;
+            activePopup       = PopupMode.LookList;
+            DrawMap();
+        }
+
+        private void PerformGet(bool getAll = false)
+        {
+            const int GET_RANGE = 384; // ~6 tiles in KOD units
+
+            var avatar = Data.AvatarObject;
+            if (avatar == null) { Log("SYS", "Not in game."); return; }
+
+            var candidates = Data.RoomObjects
+                .OfType<RoomObject>()
+                .Where(o => {
+                    if (!o.Flags.IsGettable) return false;
+                    float dx = o.CoordinateX - avatar.CoordinateX;
+                    float dz = o.CoordinateY - avatar.CoordinateY;
+                    return (dx * dx + dz * dz) <= (GET_RANGE * GET_RANGE);
+                })
+                .OrderBy(o => {
+                    float dx = o.CoordinateX - avatar.CoordinateX;
+                    float dz = o.CoordinateY - avatar.CoordinateY;
+                    return dx * dx + dz * dz;
+                })
+                .ToList();
+
+            if (candidates.Count == 0) { Log("SYS", "Nothing gettable nearby."); return; }
+
+            if (getAll)
+            {
+                foreach (var obj in candidates)
+                {
+                    SendReqGetMessage(new ObjectID(obj.ID));
+                    if (recorder.IsRecording) recorder.RecordGet(avatar, obj.Name ?? obj.ID.ToString());
+                }
+                Log("SYS", $"Getting all {candidates.Count} item(s).");
+                return;
+            }
+
+            if (candidates.Count == 1)
+            {
+                var obj = candidates[0];
+                SendReqGetMessage(new ObjectID(obj.ID));
+                if (recorder.IsRecording) recorder.RecordGet(avatar, obj.Name ?? obj.ID.ToString());
+                Log("SYS", $"Getting: {obj.Name}");
+                return;
+            }
+
+            // Multiple items — open picker popup
+            getCandidates    = candidates;
+            getSelectedIndex = 0;
+            activePopup      = PopupMode.GetList;
+            DrawMap();
+        }
+
         private void PerformAction(TuiAction action)
         {
             switch (action)
@@ -2950,10 +4567,10 @@ namespace Meridian59.TuiClient
                     IsRunning = false;
                     break;
 
-                case TuiAction.MoveUp:    HandleMovement( 0, -1); break;
-                case TuiAction.MoveDown:  HandleMovement( 0,  1); break;
-                case TuiAction.MoveLeft:  HandleMovement(-1,  0); break;
-                case TuiAction.MoveRight: HandleMovement( 1,  0); break;
+                case TuiAction.MoveUp:    SetHeldMove( 0, -1); HandleMovement( 0, -1); break;
+                case TuiAction.MoveDown:  SetHeldMove( 0,  1); HandleMovement( 0,  1); break;
+                case TuiAction.MoveLeft:  SetHeldMove(-1,  0); HandleMovement(-1,  0); break;
+                case TuiAction.MoveRight: SetHeldMove( 1,  0); HandleMovement( 1,  0); break;
 
                 case TuiAction.ScrollUp:
                     scrollOffset = Math.Min(scrollOffset + 5, logBuffer.Count - 5);
@@ -2983,6 +4600,7 @@ namespace Meridian59.TuiClient
                     break;
 
                 case TuiAction.OpenCharSheet:
+                    SendReqInventoryMessage(); // refresh inventory before showing
                     activePopup = PopupMode.CharSheet;
                     charTab = CharTab.Stats;
                     charScrollOffset = 0;
@@ -3040,7 +4658,19 @@ namespace Meridian59.TuiClient
                     break;
 
                 case TuiAction.TargetNearest:
+                    Data.SelfTarget = false;
                     AutoTargetNearest();
+                    break;
+
+                case TuiAction.TargetSelf:
+                    Data.TargetID = Data.AvatarID;
+                    Data.SelfTarget = true;
+                    Log("SYS", $"Targeting self: {Data.AvatarObject?.Name}");
+                    DrawStats();
+                    break;
+
+                case TuiAction.Look:
+                    PerformLook();
                     break;
             }
         }
@@ -3158,7 +4788,7 @@ namespace Meridian59.TuiClient
                 activePopup = PopupMode.NewsList;
                 popupSelectedIndex = 0;
                 popupScrollOffset = 0;
-                if (Data.NewsGroup.NewsGlobeID != 0) SendReqArticles();
+                if (Data.NewsGroup.NewsGlobeID != 0) { Data.NewsGroup.Articles.Clear(); SendReqArticles(); }
                 else Log("SYS", "No newsgroup selected. (Look at a newsglobe first)");
                 DrawMap();
                 return;
@@ -3200,6 +4830,21 @@ namespace Meridian59.TuiClient
             if (text.Equals("go", StringComparison.OrdinalIgnoreCase))
             {
                 SendReqGo(true);
+                return;
+            }
+
+            if (text.Equals("look", StringComparison.OrdinalIgnoreCase) ||
+                text.Equals("l",    StringComparison.OrdinalIgnoreCase))
+            {
+                PerformLook();
+                return;
+            }
+
+            if (text.Equals("get", StringComparison.OrdinalIgnoreCase) ||
+                text.Equals("get all", StringComparison.OrdinalIgnoreCase) ||
+                text.Equals("pickup", StringComparison.OrdinalIgnoreCase))
+            {
+                PerformGet(text.Equals("get all", StringComparison.OrdinalIgnoreCase));
                 return;
             }
 
@@ -3273,7 +4918,7 @@ namespace Meridian59.TuiClient
 
             if (text.Equals("rest", StringComparison.OrdinalIgnoreCase) || text.Equals("/rest", StringComparison.OrdinalIgnoreCase))
             {
-                if (isRecording) recorder.Record("Rest", Data.AvatarObject);
+                if (recorder.IsRecording) recorder.RecordRest(Data.AvatarObject);
                 Log("SYS", "Resting...");
                 var command = new UserCommandRest();
                 ServerConnection.SendQueue.Enqueue(new UserCommandMessage(command, null));
@@ -3282,7 +4927,7 @@ namespace Meridian59.TuiClient
             }
             if (text.Equals("stand", StringComparison.OrdinalIgnoreCase) || text.Equals("/stand", StringComparison.OrdinalIgnoreCase))
             {
-                if (isRecording) recorder.Record("Stand", Data.AvatarObject);
+                if (recorder.IsRecording) recorder.RecordStand(Data.AvatarObject);
                 Log("SYS", "Standing up...");
                 var command = new UserCommandStand();
                 ServerConnection.SendQueue.Enqueue(new UserCommandMessage(command, null));
@@ -3328,6 +4973,17 @@ namespace Meridian59.TuiClient
                 return;
             }
 
+            if (text.Equals("/players", StringComparison.OrdinalIgnoreCase) ||
+                text.Equals("who", StringComparison.OrdinalIgnoreCase))
+            {
+                SendSendPlayers();
+                var players = Data.OnlinePlayers.ToList();
+                Log("SYS", $"Online players ({players.Count}):");
+                foreach (var p in players)
+                    Log("SYS", $"  ID={p.ID} Name='{p.Name}' NameRID={p.NameRID} Type={p.Flags.Player}");
+                return;
+            }
+
             if (text.Equals("status", StringComparison.OrdinalIgnoreCase))
             {
                 var ri = Data.RoomInformation;
@@ -3340,6 +4996,14 @@ namespace Meridian59.TuiClient
                 return;
             }
 
+            if (text.Equals("record stop", StringComparison.OrdinalIgnoreCase))
+            {
+                recorder.Stop();
+                isRecording = false;
+                recordingFile = null;
+                return;
+            }
+
             if (text.StartsWith("record ", StringComparison.OrdinalIgnoreCase))
             {
                 string filename = text[7..].Trim();
@@ -3349,26 +5013,34 @@ namespace Meridian59.TuiClient
                     return;
                 }
 
-                if (isRecording)
-                {
-                    recorder?.Stop();
-                    Log("SYS", $"Recording stopped: {recordingFile}");
-                }
+                if (recorder.IsRecording)
+                    recorder.Stop();
 
                 recordingFile = filename;
-                isRecording = true;
                 if (recorder == null) recorder = new PathRecorder(this);
                 recorder.Start(recordingFile);
-                Log("SYS", $"Recording started: {recordingFile}");
                 return;
             }
 
-            if (text.Equals("stop", StringComparison.OrdinalIgnoreCase) && isRecording)
+            if (text.Equals("replay stop", StringComparison.OrdinalIgnoreCase))
             {
-                recorder?.Stop();
-                Log("SYS", $"Recording stopped: {recordingFile}");
-                isRecording = false;
-                recordingFile = null;
+                replayer?.Stop();
+                return;
+            }
+
+            if (text.StartsWith("replay ", StringComparison.OrdinalIgnoreCase))
+            {
+                string rest = text[7..].Trim();
+                if (string.IsNullOrEmpty(rest)) { Log("ERROR", "Usage: replay [loop|pingpong] <filename.json>"); return; }
+                ReplayMode replayMode = ReplayMode.Once;
+                string filename = rest;
+                if (rest.StartsWith("loop ", StringComparison.OrdinalIgnoreCase))
+                    { replayMode = ReplayMode.Loop; filename = rest[5..].Trim(); }
+                else if (rest.StartsWith("pingpong ", StringComparison.OrdinalIgnoreCase))
+                    { replayMode = ReplayMode.PingPong; filename = rest[9..].Trim(); }
+                if (string.IsNullOrEmpty(filename)) { Log("ERROR", "Usage: replay [loop|pingpong] <filename.json>"); return; }
+                replayer ??= new PathReplayer(this);
+                if (replayer.Load(filename)) replayer.Start(replayMode);
                 return;
             }
 
@@ -3379,18 +5051,114 @@ namespace Meridian59.TuiClient
                 if (spell != null)
                 {
                     Log("SYS", $"Casting: {spell.ResourceName} (No Target)");
-                    if (isRecording) recorder.Record("Cast", Data.AvatarObject, spell.ResourceName);
+                    if (recorder.IsRecording) recorder.RecordCast(Data.AvatarObject, spell.ResourceName);
                     SendReqCastMessage(spell.ObjectID);
                 }
                 else Log("ERROR", $"Unknown spell: {spellName}");
                 return;
             }
 
+            if (text.Equals("conveyall", StringComparison.OrdinalIgnoreCase) ||
+                text.Equals("/conveyall", StringComparison.OrdinalIgnoreCase))
+            {
+                var spell = Data.AvatarSpells.GetItemByName("conveyance", false);
+                if (spell == null)
+                {
+                    Log("ERROR", "You don't have the Convey spell.");
+                    return;
+                }
+                conveySpellID = spell.ObjectID;
+                conveyQueue.Clear();
+                foreach (var item in Data.InventoryObjects)
+                {
+                    if (!item.IsStackable) continue;
+                    if (item.Name.IndexOf("shilling", StringComparison.OrdinalIgnoreCase) >= 0) continue;
+                    conveyQueue.Enqueue(item.ID);
+                }
+                if (conveyQueue.Count == 0)
+                {
+                    Log("SYS", "No stackable items to convey (excluding shillings).");
+                    return;
+                }
+                // Small delay before first cast so any active cooldown can expire
+                conveyNextCastTime = DateTime.Now.AddMilliseconds(300);
+                if (recorder.IsRecording) recorder.RecordMacro(Data.AvatarObject, "/conveyall");
+                Log("SYS", $"[Convey] Starting convey on {conveyQueue.Count} item stack(s)...");
+                return;
+            }
+
+            if (text.Equals("conveyall stop", StringComparison.OrdinalIgnoreCase) ||
+                text.Equals("/conveyall stop", StringComparison.OrdinalIgnoreCase))
+            {
+                conveyQueue.Clear();
+                if (recorder.IsRecording) recorder.RecordMacro(Data.AvatarObject, "/conveyall stop");
+                Log("SYS", "[Convey] Macro cancelled.");
+                return;
+            }
+
+            if (text.StartsWith("/drainunbound", StringComparison.OrdinalIgnoreCase))
+            {
+                string arg = text.Length > 13 ? text[13..].Trim() : "";
+                if (string.IsNullOrEmpty(arg) || arg.Equals("stop", StringComparison.OrdinalIgnoreCase))
+                {
+                    drainUnbound = false;
+                    drainUnboundSpellID = 0;
+                    drainUnboundSpellName = "";
+                    if (recorder.IsRecording) recorder.RecordMacro(Data.AvatarObject, "/drainunbound stop");
+                    Log("SYS", "[Drain] Stopped.");
+                    DrawStats();
+                    return;
+                }
+                var drainSpell = Data.AvatarSpells.GetItemByName(arg, false);
+                if (drainSpell == null)
+                {
+                    Log("ERROR", $"[Drain] Spell '{arg}' not found in your spell list.");
+                    return;
+                }
+                drainUnboundSpellID = drainSpell.ObjectID;
+                drainUnboundSpellName = drainSpell.ResourceName;
+                drainUnbound = true;
+                if (recorder.IsRecording) recorder.RecordMacro(Data.AvatarObject, $"/drainunbound {arg}");
+                Log("SYS", $"[Drain] Active: {drainUnboundSpellName} — casting when no creature targeted.");
+                DrawStats();
+                return;
+            }
+
             if (text.StartsWith("say ", StringComparison.OrdinalIgnoreCase))
             {
                 string msg = text[4..].Trim();
-                if (isRecording) recorder.Record("Say", Data.AvatarObject, msg);
+                if (recorder.IsRecording) recorder.RecordSay(Data.AvatarObject, msg);
                 SendSayToMessage(ChatTransmissionType.Normal, msg);
+                return;
+            }
+
+            if (text.StartsWith("yell ", StringComparison.OrdinalIgnoreCase))
+            {
+                SendSayToMessage(ChatTransmissionType.Yell, text[5..].Trim());
+                return;
+            }
+
+            if (text.StartsWith("broadcast ", StringComparison.OrdinalIgnoreCase))
+            {
+                SendSayToMessage(ChatTransmissionType.Everyone, text[10..].Trim());
+                return;
+            }
+
+            if (text.StartsWith("guild ", StringComparison.OrdinalIgnoreCase))
+            {
+                SendSayToMessage(ChatTransmissionType.Guild, text[6..].Trim());
+                return;
+            }
+
+            if (text.StartsWith("emote ", StringComparison.OrdinalIgnoreCase))
+            {
+                SendSayToMessage(ChatTransmissionType.Emote, text[6..].Trim());
+                return;
+            }
+
+            if (text.StartsWith("e ", StringComparison.OrdinalIgnoreCase))
+            {
+                SendSayToMessage(ChatTransmissionType.Emote, text[2..].Trim());
                 return;
             }
 
@@ -3403,14 +5171,60 @@ namespace Meridian59.TuiClient
                 string[] parts = text[5..].Split(new[] { ' ' }, 2);
                 if (parts.Length == 2)
                 {
-                    Log("CHAT", $"You tell {parts[0]}: {parts[1]}");
-                    if (isRecording) recorder.Record("Tell", Data.AvatarObject, $"{parts[0]}:{parts[1]}");
-                    SendSayGroupMessage(0, parts[1]); 
+                    string targetName = parts[0];
+                    string msg = parts[1];
+                    // Look up player object ID by name from the online player list
+                    var onlineTarget = Data.OnlinePlayers.GetItemByName(targetName);
+                    if (onlineTarget != null)
+                    {
+                        Log("CHAT", $"You tell {onlineTarget.Name}: {msg}");
+                        if (recorder.IsRecording) recorder.RecordTell(Data.AvatarObject, $"{onlineTarget.Name}:{msg}");
+                        SendSayGroupMessage(onlineTarget.ID, msg);
+                    }
+                    else
+                    {
+                        Log("ERROR", $"Player '{targetName}' not found online. Use /players to list online players.");
+                    }
                 }
                 return;
             }
 
-            if (isRecording) recorder.Record("Say", Data.AvatarObject, text);
+            // /prefs [flag] [on|off]  — show or toggle server-side preferences
+            if (text.StartsWith("/prefs", StringComparison.OrdinalIgnoreCase))
+            {
+                string[] parts = text.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length == 1)
+                {
+                    // Show current state (live from server-acknowledged ClientPreferences)
+                    var p = Data.ClientPreferences;
+                    Log("SYS", $"Prefs: safetyoff={p.IsSafetyOff} tempsafe={p.TempSafe} grouping={p.Grouping} autoloot={p.AutoLoot} autocombine={p.AutoCombine} reagentbag={p.ReagentBag} spellpower={p.SpellPower}");
+                }
+                else if (parts.Length == 3 && bool.TryParse(parts[2], out bool val))
+                {
+                    var p = Data.ClientPreferences;
+                    switch (parts[1].ToLower())
+                    {
+                        case "safetyoff":   p.IsSafetyOff  = val; break;
+                        case "tempsafe":    p.TempSafe      = val; break;
+                        case "grouping":    p.Grouping      = val; break;
+                        case "autoloot":    p.AutoLoot      = val; break;
+                        case "autocombine": p.AutoCombine   = val; break;
+                        case "reagentbag":  p.ReagentBag    = val; break;
+                        case "spellpower":  p.SpellPower    = val; break;
+                        default: Log("ERROR", $"Unknown pref: {parts[1]}"); return;
+                    }
+                    SendUserCommandSendPreferences();
+                    Log("SYS", $"Set {parts[1]}={val} and sent to server.");
+                }
+                else
+                {
+                    Log("SYS", "Usage: /prefs  OR  /prefs <flag> <true|false>");
+                    Log("SYS", "Flags: safetyoff tempsafe grouping autoloot autocombine reagentbag spellpower");
+                }
+                return;
+            }
+
+            if (recorder.IsRecording) recorder.RecordSay(Data.AvatarObject, text);
             SendSayToMessage(ChatTransmissionType.Normal, text);
         }
 
@@ -3612,20 +5426,42 @@ namespace Meridian59.TuiClient
             }
         }
 
+        public void ExecuteMacro(string command) => ProcessCommand(command);
+
+        // Used by PathReplayer for "Go" events: force-sends the recorded position then raw ReqGo
+        // without re-running the wall-snap logic. Re-snapping from a replayed position can pick a
+        // different exit wall than the original and cause the server to ignore the door crossing.
+        public void SendReplayGo(ushort x, ushort y, ushort angle)
+        {
+            var avatar = Data.AvatarObject;
+            if (avatar == null) return;
+            avatar.CoordinateX = x;
+            avatar.CoordinateY = y;
+            avatar.AngleUnits  = angle;
+            SendReqMoveMessage(true);
+            ServerConnection.SendQueue.Enqueue(new ReqGoMessage());
+            GameTick.DidReqGo();
+        }
+
         public override void SendReqMoveMessage(bool ForceSend = false)
         {
+            // AvatarID is invalid during login/char-select — silently skip, not an error
             if (!ObjectID.IsValid(Data.AvatarID))
-            {
-                Logger.Log("TuiClient", LogType.Error, $"SendReqMoveMessage: AvatarID is INVALID: {Data.AvatarID:X8}");
-            }
+                return;
 
             // AVOID sending ReqMove(0,0) when we have a character selected but no avatar object yet.
             // This prevents the server from snapping our spawn position to 0,0 during room entry.
-            if (ObjectID.IsValid(Data.AvatarID) && Data.AvatarObject == null) 
-            {
+            if (Data.AvatarObject == null)
                 return;
-            }
+
             base.SendReqMoveMessage(ForceSend);
+        }
+
+        private void SetHeldMove(int dx, int dz)
+        {
+            heldMoveDx = dx;
+            heldMoveDz = dz;
+            lastKeyMoveTime = DateTime.Now;
         }
 
         private void HandleMovement(int dx, int dy)
@@ -3663,7 +5499,7 @@ namespace Meridian59.TuiClient
                 avatar.HorizontalSpeed = speedByte;
                 SendReqMoveMessage(true);
                 lastMoveTime = DateTime.Now;
-                if (isRecording) recorder.Record("Move", avatar, $"X:{avatar.CoordinateX},Y:{avatar.CoordinateY},A:{angle}");
+                if (recorder.IsRecording) recorder.RecordMove(avatar);
                 return;
             }
 
@@ -3679,7 +5515,7 @@ namespace Meridian59.TuiClient
             }
 
             lastMoveTime = DateTime.Now;
-            if (isRecording) recorder.Record("Move", avatar, $"X:{avatar.CoordinateX},Y:{avatar.CoordinateY},A:{angle}");
+            if (recorder.IsRecording) recorder.RecordMove(avatar);
         }
 
         public override void SendReqActivate()
@@ -3747,12 +5583,12 @@ namespace Meridian59.TuiClient
             if (nearestObj != null && minDistObj < 128.0)
             {
                 Log("SYS", $"Activating: {nearestObj.Name} (ID: {nearestObj.ID})");
-                if (isRecording) recorder.Record("Activate", avatar, $"Object:{nearestObj.ID}");
+                // TODO: record Activate with target ID for replayer
                 base.SendReqActivate(nearestObj.ID);
             }
             else
             {
-                if (isRecording) recorder.Record("Activate", avatar, "Empty");
+                // TODO: record Activate (no target) for replayer
                 base.SendReqActivate();
             }
         }
@@ -3850,9 +5686,10 @@ namespace Meridian59.TuiClient
                     // Send the precise move request before the GO. ReqMove constructor is (X, Y, Mode, MapID, Angle)
                     var moveMsg = new ReqMoveMessage(x, y, 0, Data.RoomInformation.RoomID, avatar.AngleUnits);
                     ServerConnection.SendQueue.Enqueue(moveMsg);
-                    
+
                     // Small delay or just enqueue GO immediately
                     ServerConnection.SendQueue.Enqueue(new ReqGoMessage());
+                    if (recorder.IsRecording) recorder.RecordGo(avatar);
                     return;
                 }
                 else
@@ -3861,7 +5698,7 @@ namespace Meridian59.TuiClient
                 }
             }
 
-            if (isRecording) recorder.Record("Go", avatar, $"X:{avatar.CoordinateX},Y:{avatar.CoordinateY}");
+            if (recorder.IsRecording) recorder.RecordGo(avatar);
             base.SendReqGo(SendPositionBefore);
         }
         public void DrawInputField()
@@ -3888,15 +5725,11 @@ namespace Meridian59.TuiClient
         public override void SendActionMessage(ActionType Action)
         {
             base.SendActionMessage(Action);
-            if (isRecording && Data.AvatarObject != null)
-                recorder.Record("Action", Data.AvatarObject, Action.ToString());
         }
 
         public override void SendSayGroupMessage(uint TargetID, string Text)
         {
             base.SendSayGroupMessage(TargetID, Text);
-            if (isRecording)
-                recorder.Record("SaidGroup", Data.AvatarObject, $"{TargetID}:{Text}");
         }
         protected void Dispose(bool disposing)
         {

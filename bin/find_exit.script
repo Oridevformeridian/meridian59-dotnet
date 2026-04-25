@@ -1,0 +1,8 @@
+# Script to find exit coordinates
+wait 3000
+/use 1
+wait 5000
+pos
+/dumpwalls
+wait 2000
+/quit

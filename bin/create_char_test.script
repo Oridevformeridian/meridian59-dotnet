@@ -1,0 +1,17 @@
+wait 3000
+/createchar 1
+wait 3000
+TestTuiChar
+wait 1000
+M
+wait 1000
+30 30 40 30 40 30
+wait 1000
+list
+wait 1000
+add minor heal
+wait 1000
+done
+wait 1000
+confirm
+wait 10000

@@ -1,0 +1,31 @@
+# Walk test script
+# Wait for character list to load
+wait 3000
+# Select character TestTuiChar (slot 1)
+/use 1
+# Wait for room to load
+wait 5000
+# Rescue character to a safe position inside the room (Tile coordinates)
+# Tile 5, 5 is roughly the center of Raza Inn.
+move 5 5
+wait 2000
+log STARTING WALK TEST
+pos
+log WALKING W
+w
+wait 2000
+pos
+log WALKING S
+s
+wait 2000
+pos
+log WALKING A
+a
+wait 2000
+pos
+log WALKING D
+d
+wait 2000
+pos
+log ENDING WALK TEST
+/quit

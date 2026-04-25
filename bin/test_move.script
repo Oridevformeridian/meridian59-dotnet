@@ -1,0 +1,24 @@
+# Move test script
+wait 5000
+log Selecting character slot 1...
+/use 1
+wait 5000
+log Testing movement...
+w
+wait 1000
+s
+wait 1000
+a
+wait 1000
+d
+wait 1000
+north
+wait 1000
+south
+wait 1000
+east
+wait 1000
+west
+wait 1000
+log Movement test complete.
+/quit

@@ -1,0 +1,21 @@
+# Script to exit Raza Inn
+# Wait for character list and select
+wait 3000
+/use 1
+# Wait for room to load
+wait 8000
+log STARTING EXIT MISSION
+r
+pos
+# Move South to the exit area (Row 8)
+# tile 2.25 8
+tile 2.25 8
+wait 5000
+pos
+log GOING THROUGH DOOR
+g
+wait 5000
+# Should now be in Raza
+pos
+log MISSION COMPLETE
+/quit

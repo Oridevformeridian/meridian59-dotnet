@@ -36,7 +36,7 @@ namespace Meridian59.TuiClient
                     while (client.IsRunning)
                     {
                         client.Tick();
-                        Thread.Sleep(10);
+                        Thread.Sleep(5);
                     }
                 }
             }

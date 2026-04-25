@@ -1899,6 +1899,7 @@ namespace Meridian59.Data
                     break;
 
                 case MessageTypeGameMode.Players:                   // 136
+                    HandlePlayers((PlayersMessage)Message);
                     break;
 
                 case MessageTypeGameMode.PlayerAdd:                 // 137
@@ -2349,7 +2350,10 @@ namespace Meridian59.Data
             // init some values which will be updated on triggers (e.g. moves)
             obj.UpdateDistanceToAvatarSquared(avatarObject);
             obj.UpdateViewerAngle(ref viewPos2D);
-                
+
+            // Guard against duplicate Create messages — remove any stale entry first
+            RoomObjects.RemoveByID(obj.ID);
+
             // add to list
             RoomObjects.Add(obj);
         }
@@ -2742,6 +2746,7 @@ namespace Meridian59.Data
 
         protected virtual void HandleInventoryAdd(InventoryAddMessage Message)
         {
+            InventoryObjects.RemoveByID(Message.NewInventoryObject.ID);
             InventoryObjects.Add(Message.NewInventoryObject);
 
             // look up buttons which are assigned to this item
@@ -3000,10 +3005,12 @@ namespace Meridian59.Data
             switch (Message.BuffType)
             {
                 case BuffType.AvatarBuff:
+                    AvatarBuffs.RemoveByID(Message.NewBuffObject.ID);
                     AvatarBuffs.Add(Message.NewBuffObject);
                     break;
 
                 case BuffType.RoomBuff:
+                    RoomBuffs.RemoveByID(Message.NewBuffObject.ID);
                     RoomBuffs.Add(Message.NewBuffObject);
                     break;
             }

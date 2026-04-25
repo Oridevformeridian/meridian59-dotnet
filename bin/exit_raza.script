@@ -1,0 +1,31 @@
+# Script to exit Raza Inn and return
+wait 2000
+dump room
+pos
+noclip
+
+# Go to Raza Inn exit (Row 1, Col 6)
+# Center of (1, 6) is X = 6*64+32 = 416, Y = 1*64+32 = 96
+move 416 96
+wait 1000
+pos
+go
+wait 3000
+
+# Verify we are in Raza (guest2)
+dump room
+pos
+
+# Raza exit back to Raza Inn is at Row 26, Col 41
+# Center of (26, 41) is X = 41*64+32 = 2656, Y = 26*64+32 = 1696
+move 2656 1696
+wait 1000
+pos
+go
+wait 3000
+
+# Verify we are back in Raza Inn
+dump room
+pos
+
+quit

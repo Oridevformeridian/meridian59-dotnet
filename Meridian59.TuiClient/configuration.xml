@@ -32,6 +32,24 @@
   <admins>
   </admins>
 
+  <!-- Server-side player preferences sent on login.
+       safetyoff:   PvP safety off
+       tempsafe:    Receive temporary angel on death
+       grouping:    Join building/defense groups automatically
+       autoloot:    Auto-pick up loot from kills
+       autocombine: Auto-combine spell reagent items
+       reagentbag:  Auto-move reagents to reagent bag
+       spellpower:  Show spell power readout on cast
+  -->
+  <preferences
+    safetyoff="false"
+    tempsafe="true"
+    grouping="false"
+    autoloot="true"
+    autocombine="true"
+    reagentbag="false"
+    spellpower="false" />
+
   <keymap>
     <bind key="UpArrow" action="MoveUp" />
     <bind key="DownArrow" action="MoveDown" />
@@ -42,7 +60,8 @@
     <bind key="A" action="MoveLeft" />
     <bind key="D" action="MoveRight" />
     <bind key="Spacebar" action="Use" />
-    <bind key="Q" action="Quit" />
+    <bind key="Q" action="TargetSelf" />
+    <!-- Quit via /quit command or Ctrl+Q -->
     <bind key="Add" action="ZoomIn" />
     <bind key="OemPlus" action="ZoomIn" />
     <bind key="Subtract" action="ZoomOut" />
