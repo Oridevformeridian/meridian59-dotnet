@@ -70,6 +70,11 @@ namespace Meridian59.TuiClient
         private AsciiRenderer renderer;
         private PathRecorder recorder;
         private PathReplayer replayer;
+        internal RoomAnnotationStore annotations = new();
+        // Stashed when ManualGo fires; committed on next room load
+        private uint pendingDoorRoomID = 0;
+        private ushort pendingDoorX = 0;
+        private ushort pendingDoorY = 0;
         private bool isRecording = false;
         private string recordingFile = null;
         private bool isNoClip = false;
@@ -928,6 +933,16 @@ namespace Meridian59.TuiClient
             if (Message.RoomInfo.RoomID != lastLoggedRoomId)
             {
                 Log("SYS", $"Entered room: {Message.RoomInfo.RoomName} (ID: {Message.RoomInfo.RoomID}, File: {Message.RoomInfo.RoomFile})");
+
+                // Commit door + spawn annotation if we have a pending ManualGo
+                if (pendingDoorRoomID != 0)
+                {
+                    annotations.RecordTransition(
+                        pendingDoorRoomID, pendingDoorX, pendingDoorY,
+                        Message.RoomInfo.RoomID, Message.RoomInfo.PosX, Message.RoomInfo.PosY);
+                    pendingDoorRoomID = 0;
+                }
+
                 lastLoggedRoomId = Message.RoomInfo.RoomID;
                 recorder?.RecordRoom(Data.AvatarObject, Message.RoomInfo.RoomID, Message.RoomInfo.RoomName);
                 lastRoomTransitionTime = DateTime.Now;
@@ -5873,6 +5888,10 @@ namespace Meridian59.TuiClient
 
                     // Small delay or just enqueue GO immediately
                     ServerConnection.SendQueue.Enqueue(new ReqGoMessage());
+                    // Stash door location — committed when the next room loads
+                    pendingDoorRoomID = Data.RoomInformation.RoomID;
+                    pendingDoorX      = avatar.CoordinateX;
+                    pendingDoorY      = avatar.CoordinateY;
                     if (recorder.IsRecording) recorder.RecordGo(avatar);
                     return;
                 }
@@ -5883,6 +5902,10 @@ namespace Meridian59.TuiClient
             }
 
             if (recorder.IsRecording) recorder.RecordGo(avatar);
+            // Stash door location for the fallback path
+            pendingDoorRoomID = Data.RoomInformation.RoomID;
+            pendingDoorX      = avatar.CoordinateX;
+            pendingDoorY      = avatar.CoordinateY;
             base.SendReqGo(SendPositionBefore);
         }
         public void DrawInputField()

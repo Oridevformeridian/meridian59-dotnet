@@ -197,6 +197,23 @@ namespace Meridian59.TuiClient
                             out int avViewX, out int avViewY);
                 ApplyLighting(nextBuffer, avViewX, avViewY);
 
+                // Annotation overlay: Doors (D) and Spawns (S)
+                uint roomID = client.Data?.RoomInformation?.RoomID ?? 0;
+                if (roomID != 0)
+                {
+                    foreach (var ann in client.annotations.GetAnnotations(roomID))
+                    {
+                        WorldToView(ann.X * 16f - 1024f, ann.Y * 16f - 1024f, out int ax, out int ay);
+                        if (ax >= 0 && ax < width && ay >= 1 && ay < height)
+                        {
+                            if (ann.Type == "Door")
+                                nextBuffer.Set(ax, ay, 'D', 1.0f, ConsoleColor.Yellow, ConsoleColor.Black);
+                            else
+                                nextBuffer.Set(ax, ay, 'S', 1.0f, ConsoleColor.Cyan, ConsoleColor.Black);
+                        }
+                    }
+                }
+
                 if (data != null)
                 {
                     uint targetID = (data.TargetObject as RoomObject)?.ID ?? 0;
