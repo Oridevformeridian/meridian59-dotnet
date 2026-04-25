@@ -16,9 +16,9 @@
       port="5959"
       useipv6="false"
       stringdictionary="rsc0000-900.rsb"
-      username="test"
-      password="test"
-      character="Tester">
+      username=""
+      password=""
+      character="">
       <ignorelist />
     </connection>
   </connections>

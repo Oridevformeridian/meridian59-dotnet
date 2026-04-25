@@ -980,6 +980,11 @@ namespace Meridian59.TuiClient
 
             base.HandleGameModeMessage(Message);
 
+            if (pi == MessageTypeGameMode.PasswordOK)
+                Log("SYS", "Password changed successfully.");
+            else if (pi == MessageTypeGameMode.PasswordNotOK)
+                Log("SYS", "Password change failed — old password incorrect.");
+
             // News debug: log after base has processed so Data is already updated
             if (pi == MessageTypeGameMode.LookNewsGroup && Message is LookNewsGroupMessage lngMsg)
             {
@@ -4981,6 +4986,20 @@ namespace Meridian59.TuiClient
                 Log("SYS", $"Online players ({players.Count}):");
                 foreach (var p in players)
                     Log("SYS", $"  ID={p.ID} Name='{p.Name}' NameRID={p.NameRID} Type={p.Flags.Player}");
+                return;
+            }
+
+            if (text.StartsWith("passwd ", StringComparison.OrdinalIgnoreCase))
+            {
+                // passwd <oldpassword> <newpassword>
+                var parts = text.Split(' ', 3, StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length != 3)
+                {
+                    Log("SYS", "Usage: passwd <oldpassword> <newpassword>");
+                    return;
+                }
+                SendReqChangePassword(parts[1], parts[2]);
+                Log("SYS", "Password change request sent.");
                 return;
             }
 
