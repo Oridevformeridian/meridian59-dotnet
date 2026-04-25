@@ -59,7 +59,7 @@
     <bind key="S" action="MoveDown" />
     <bind key="A" action="MoveLeft" />
     <bind key="D" action="MoveRight" />
-    <bind key="Spacebar" action="Use" />
+     <bind key="Spacebar" action="ManualGo" />
     <bind key="Q" action="TargetSelf" />
     <!-- Quit via /quit command or Ctrl+Q -->
     <bind key="Add" action="ZoomIn" />
@@ -69,7 +69,7 @@
     <bind key="PageUp" action="ScrollUp" />
     <bind key="PageDown" action="ScrollDown" />
     <bind key="Enter" action="EnterChat" />
-    <bind key="G" action="ManualGo" />
+     <bind key="G" action="Get" />
     <!-- Example hotkeys -->
     <bind key="D1" action="Hotkey1" />
     <bind key="D2" action="Hotkey2" />

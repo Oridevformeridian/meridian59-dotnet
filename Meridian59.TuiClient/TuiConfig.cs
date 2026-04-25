@@ -30,6 +30,7 @@ namespace Meridian59.TuiClient
         ToggleRun,
         Refresh,
         ManualGo,
+        Get,
         ToggleNetTab,
         OpenCharSheet,
         ToggleAutoAttack,
@@ -68,7 +69,7 @@ namespace Meridian59.TuiClient
             KeyMap[ConsoleKey.S]          = TuiAction.MoveDown;
             KeyMap[ConsoleKey.A]          = TuiAction.MoveLeft;
             KeyMap[ConsoleKey.D]          = TuiAction.MoveRight;
-            KeyMap[ConsoleKey.Spacebar]   = TuiAction.Use;
+            KeyMap[ConsoleKey.Spacebar]   = TuiAction.ManualGo;
             KeyMap[ConsoleKey.Q]          = TuiAction.TargetSelf;
             KeyMap[ConsoleKey.Add]        = TuiAction.ZoomIn;
             KeyMap[ConsoleKey.OemPlus]    = TuiAction.ZoomIn;
@@ -79,7 +80,7 @@ namespace Meridian59.TuiClient
             KeyMap[ConsoleKey.Enter]      = TuiAction.EnterChat;
             KeyMap[ConsoleKey.R]          = TuiAction.ToggleRun;
             KeyMap[ConsoleKey.F5]         = TuiAction.Refresh;
-            KeyMap[ConsoleKey.G]          = TuiAction.ManualGo;
+            KeyMap[ConsoleKey.G]          = TuiAction.Get;
             KeyMap[ConsoleKey.N]          = TuiAction.ToggleNetTab;
             KeyMap[ConsoleKey.C]          = TuiAction.OpenCharSheet;
             KeyMap[ConsoleKey.F]          = TuiAction.ToggleAutoAttack;

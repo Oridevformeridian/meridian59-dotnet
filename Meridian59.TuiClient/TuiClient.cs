@@ -40,6 +40,7 @@ namespace Meridian59.TuiClient
         GetList,
         StatChange,
         StatChangeConfirm,
+        Help,
     }
 
     public enum NewCharTab { Stats = 0, Skills = 1, Spells = 2, Looks = 3 }
@@ -2705,6 +2706,127 @@ namespace Meridian59.TuiClient
             ("Weaponcraft", "WC "),
         };
 
+        private static readonly (string key, string desc)[] HelpEntries = new[]
+        {
+            // Movement
+            ("W/A/S/D",       "Move"),
+            ("Arrows",        "Move"),
+            ("Space",         "Enter portal/go"),
+            ("R",             "Toggle run"),
+            // Combat
+            ("F",             "Toggle auto-attack"),
+            ("T",             "Target nearest"),
+            ("Q",             "Target self"),
+            // UI
+            ("C",             "Character sheet"),
+            ("L",             "Look"),
+            ("G",             "Get item"),
+            ("N",             "Toggle net tab"),
+            ("F5",            "Refresh screen"),
+            ("+/-",           "Zoom in/out"),
+            ("PgUp/PgDn",     "Scroll log"),
+            ("Ctrl+W",        "Who list"),
+            ("Ctrl+S",        "Toggle sound"),
+            ("Enter",         "Open chat"),
+            // Commands
+            ("get / get all", "Pick up item(s)"),
+            ("look <name>",   "Look at object"),
+            ("emote <text>",  "Emote"),
+            ("say <text>",    "Say aloud"),
+            ("tell <n> <t>",  "Tell player"),
+            ("passwd <o> <n>","Change password"),
+            ("who",           "List online players"),
+            ("status",        "Show room/stats"),
+            ("cast <spell>",  "Cast spell"),
+            ("rest / stand",  "Rest or stand"),
+            ("quit",          "Quit"),
+        };
+
+        private void DrawHelpPopup(int startX, int startY, int width, int height)
+        {
+            const int COL_W   = 18; // key column width
+            const int DESC_W  = 20; // desc column width
+            const int PAIR_W  = COL_W + DESC_W; // one column pair
+            int cols          = Math.Max(1, (width - 4) / PAIR_W); // how many side-by-side columns fit
+            int innerW        = width - 2;
+            int innerH        = height - 4; // title + border
+
+            // Background
+            Console.BackgroundColor = ConsoleColor.DarkBlue;
+            Console.ForegroundColor = ConsoleColor.White;
+            for (int row = 0; row < height; row++)
+            {
+                Console.SetCursorPosition(startX, startY + row);
+                Console.Write(new string(' ', width));
+            }
+
+            // Border
+            Console.SetCursorPosition(startX, startY);
+            Console.Write("╔" + new string('═', innerW) + "╗");
+            Console.SetCursorPosition(startX, startY + height - 1);
+            Console.Write("╚" + new string('═', innerW) + "╝");
+            for (int r = 1; r < height - 1; r++)
+            {
+                Console.SetCursorPosition(startX, startY + r);
+                Console.Write("║");
+                Console.SetCursorPosition(startX + width - 1, startY + r);
+                Console.Write("║");
+            }
+
+            // Title
+            string title = "─── HELP ───";
+            Console.SetCursorPosition(startX + (width - title.Length) / 2, startY);
+            Console.ForegroundColor = ConsoleColor.Yellow;
+            Console.Write(title);
+
+            // Column headers
+            Console.SetCursorPosition(startX + 2, startY + 1);
+            Console.ForegroundColor = ConsoleColor.Cyan;
+            for (int c = 0; c < cols; c++)
+            {
+                int xOff = startX + 2 + c * PAIR_W;
+                Console.SetCursorPosition(xOff, startY + 1);
+                Console.Write("Key".PadRight(COL_W));
+                Console.Write("Action".PadRight(DESC_W));
+            }
+
+            // Separator
+            Console.SetCursorPosition(startX + 1, startY + 2);
+            Console.ForegroundColor = ConsoleColor.DarkCyan;
+            Console.Write(new string('─', innerW));
+
+            // Entries — fill column by column
+            int rows  = (int)Math.Ceiling((double)HelpEntries.Length / cols);
+            rows      = Math.Min(rows, innerH - 2);
+            for (int r = 0; r < rows; r++)
+            {
+                for (int c = 0; c < cols; c++)
+                {
+                    int idx = c * rows + r;
+                    if (idx >= HelpEntries.Length) break;
+                    var (k, d) = HelpEntries[idx];
+                    int xOff = startX + 2 + c * PAIR_W;
+                    int yOff = startY + 3 + r;
+                    Console.SetCursorPosition(xOff, yOff);
+                    Console.ForegroundColor = ConsoleColor.White;
+                    Console.Write(k.Length > COL_W - 1 ? k[..(COL_W - 1)] + " " : k.PadRight(COL_W));
+                    Console.ForegroundColor = ConsoleColor.Gray;
+                    Console.Write(d.Length > DESC_W ? d[..DESC_W] : d.PadRight(DESC_W));
+                }
+            }
+
+            // Footer
+            Console.SetCursorPosition(startX + 1, startY + height - 1);
+            Console.ForegroundColor = ConsoleColor.DarkCyan;
+            Console.Write("╚");
+            Console.ForegroundColor = ConsoleColor.DarkGray;
+            string footer = "─ [Esc] Close ─";
+            Console.SetCursorPosition(startX + (width - footer.Length) / 2, startY + height - 1);
+            Console.Write(footer);
+
+            Console.ResetColor();
+        }
+
         private void DrawStatChangePopup(int startX, int startY, int width, int height)
         {
             var sc = Data.StatChangeInfo;
@@ -3182,6 +3304,11 @@ namespace Meridian59.TuiClient
             if (activePopup == PopupMode.StatChange || activePopup == PopupMode.StatChangeConfirm)
             {
                 DrawStatChangePopup(startX, startY, width, height);
+                return;
+            }
+            if (activePopup == PopupMode.Help)
+            {
+                DrawHelpPopup(startX, startY, width, height);
                 return;
             }
 
@@ -3884,6 +4011,15 @@ namespace Meridian59.TuiClient
                 // Any key closes it
                 Data.LookObject.IsVisible = false;
                 Data.LookPlayer.IsVisible = false;
+                activePopup = PopupMode.None;
+                popupJustClosed = true;
+                DrawMap();
+                return;
+            }
+
+            if (activePopup == PopupMode.Help)
+            {
+                // Any key closes it
                 activePopup = PopupMode.None;
                 popupJustClosed = true;
                 DrawMap();
@@ -4604,6 +4740,10 @@ namespace Meridian59.TuiClient
                     SendReqGo(true);
                     break;
 
+                case TuiAction.Get:
+                    PerformGet();
+                    break;
+
                 case TuiAction.OpenCharSheet:
                     SendReqInventoryMessage(); // refresh inventory before showing
                     activePopup = PopupMode.CharSheet;
@@ -4726,7 +4866,15 @@ namespace Meridian59.TuiClient
             if (text.Equals("s",  StringComparison.OrdinalIgnoreCase)) { HandleMovement( 0,  1); return; }
             if (text.Equals("a",  StringComparison.OrdinalIgnoreCase)) { HandleMovement(-1,  0); return; }
             if (text.Equals("d",  StringComparison.OrdinalIgnoreCase)) { HandleMovement( 1,  0); return; }
-            if (text.Equals("g",  StringComparison.OrdinalIgnoreCase)) { PerformAction(TuiAction.ManualGo); return; }
+            if (text.Equals("help", StringComparison.OrdinalIgnoreCase) ||
+                text.Equals("?",    StringComparison.OrdinalIgnoreCase))
+            {
+                activePopup = PopupMode.Help;
+                DrawMap();
+                return;
+            }
+
+            if (text.Equals("g",  StringComparison.OrdinalIgnoreCase)) { PerformGet(); return; }
             if (text.Equals("u",  StringComparison.OrdinalIgnoreCase)) { PerformAction(TuiAction.Use); return; }
 
             // Cardinal direction movement (for scripts: "north", "go north", "move north", etc.)
