@@ -111,6 +111,8 @@ namespace Meridian59.TuiClient
         private int popupScrollOffset = 0;
         private object currentPopupItem = null;
         private bool popupJustClosed = false;
+        private bool popupDirty = true;    // true = popup needs a full redraw
+        private bool popupLocked = false;  // true = renderer lock has been set for current popup
         private CharTab charTab = CharTab.Stats;
         private int charScrollOffset = 0;
         private int charSelectionIndex = 0;
@@ -359,7 +361,7 @@ namespace Meridian59.TuiClient
             loginUsername = "";
             loginPassword = "";
             loginField = LoginField.Username;
-            activePopup = PopupMode.Login;
+            SetActivePopup(PopupMode.Login);
             DrawMap();
         }
 
@@ -409,8 +411,8 @@ namespace Meridian59.TuiClient
             }
 
              // Hook up data changes to trigger redraws if popup is active
-             Data.NewsGroup.Articles.ListChanged += (s, e) => { if (activePopup == PopupMode.NewsList) DrawMap(); };
-             ResourceManager.Mails.ListChanged += (s, e) => { if (activePopup == PopupMode.MailList) DrawMap(); };
+             Data.NewsGroup.Articles.ListChanged += (s, e) => { if (activePopup == PopupMode.NewsList) { popupDirty = true; DrawMap(); } };
+             ResourceManager.Mails.ListChanged += (s, e) => { if (activePopup == PopupMode.MailList) { popupDirty = true; DrawMap(); } };
              Data.AvatarBuffs.ListChanged += (s, e) => { if (HasTty) lock (consoleLock) DrawBuffs(); };
               Data.OnlinePlayers.ListChanged += (s, e) =>
               {
@@ -422,11 +424,11 @@ namespace Meridian59.TuiClient
              Data.AvatarBuffs.ListChanged += (s, e) => { if (HasTty) lock (consoleLock) DrawBuffs(); };
              Data.NewsGroup.PropertyChanged += (s, e) =>
              {
-                 if (e.PropertyName == "Text" && activePopup == PopupMode.NewsRead) DrawMap();
+                 if (e.PropertyName == "Text" && activePopup == PopupMode.NewsRead) { popupDirty = true; DrawMap(); }
                   if (e.PropertyName == "IsVisible" && Data.NewsGroup.IsVisible)
                   {
                       Data.LookObject.IsVisible = false;  // suppress the companion Look message
-                      activePopup      = PopupMode.NewsList;
+                      SetActivePopup(PopupMode.NewsList);
                       popupSelectedIndex  = 0;
                       popupScrollOffset   = 0;
                       DrawMap();
@@ -441,7 +443,7 @@ namespace Meridian59.TuiClient
                      // Don't overwrite the news popup if a newsglobe look just opened it
                      if (activePopup == PopupMode.NewsList || activePopup == PopupMode.NewsRead)
                          return;
-                     activePopup = PopupMode.LookDetail;
+                     SetActivePopup(PopupMode.LookDetail);
                      DrawMap();
                  }
              };
@@ -450,7 +452,7 @@ namespace Meridian59.TuiClient
              {
                  if (e.PropertyName == "IsVisible" && Data.LookPlayer.IsVisible)
                  {
-                     activePopup = PopupMode.LookDetail;
+                     SetActivePopup(PopupMode.LookDetail);
                      DrawMap();
                  }
              };
@@ -473,7 +475,7 @@ namespace Meridian59.TuiClient
                     statChangeSelectedIndex = 0;
                     statChangeEditingIndex  = -1;
                     statChangeEditBuffer    = "";
-                    activePopup = PopupMode.StatChange;
+                    SetActivePopup(PopupMode.StatChange);
                     Log("SYS", "Ancient trinket activated — redistribute your stats.");
                     DrawMap();
                 }
@@ -918,7 +920,7 @@ namespace Meridian59.TuiClient
             // Interactive: show character select popup
             charSelectList = Message.WelcomeInfo.Characters.ToList();
             popupSelectedIndex = 0;
-            activePopup = PopupMode.CharSelect;
+            SetActivePopup(PopupMode.CharSelect);
             DrawMap();
         }
 
@@ -1062,7 +1064,7 @@ namespace Meridian59.TuiClient
                 newCharScrollOffset = 0;
                 newCharName = Data.CharCreationInfo.AvatarName ?? "";
                 newCharNamingMode = false;
-                activePopup = PopupMode.NewChar;
+                SetActivePopup(PopupMode.NewChar);
                 DrawMap();
             }
 
@@ -1072,7 +1074,7 @@ namespace Meridian59.TuiClient
                 buySelectedIndex = 0;
                 buyQuantityItemIndex = -1;
                 buyQuantityBuffer = "";
-                activePopup = PopupMode.Buy;
+                SetActivePopup(PopupMode.Buy);
                 DrawMap();
             }
 
@@ -1081,7 +1083,7 @@ namespace Meridian59.TuiClient
             {
                 offerSelectedIndex = 0;
                 offerPendingIDs.Clear();
-                activePopup = PopupMode.Offer;
+                SetActivePopup(PopupMode.Offer);
                 DrawMap();
             }
 
@@ -1093,7 +1095,7 @@ namespace Meridian59.TuiClient
                 {
                     offerSelectedIndex = 0;
                     offerPendingIDs.Clear();
-                    activePopup = PopupMode.Offer;
+                    SetActivePopup(PopupMode.Offer);
                 }
                 DrawMap();
             }
@@ -1104,7 +1106,7 @@ namespace Meridian59.TuiClient
                 Log("SYS", "Trade offer cancelled by other party.");
                 if (activePopup == PopupMode.Offer)
                 {
-                    activePopup = PopupMode.None;
+                    SetActivePopup(PopupMode.None);
                     popupJustClosed = true;
                     offerPendingIDs.Clear();
                 }
@@ -2140,6 +2142,7 @@ namespace Meridian59.TuiClient
             int w = Console.WindowWidth;
             if (startX + width > w - 1) width = w - 1 - startX;
             if (width < 20 || height < 8) return;
+            if (!EnsurePopupLocked(startX, startY, width, height)) return;
 
             // Top border with centred title
             string titleText = " Character ";
@@ -2212,6 +2215,7 @@ namespace Meridian59.TuiClient
              int dlgX = (w - dlgW) / 2;
              int dlgY = Math.Max(5, (h - dlgH) / 2);
              dlgH = Math.Min(dlgH, h - 3 - dlgY);
+             if (!EnsurePopupLocked(dlgX, dlgY, dlgW, dlgH)) return;
 
              Console.SetCursorPosition(dlgX, dlgY);
             Console.ForegroundColor = ConsoleColor.Cyan;
@@ -2264,6 +2268,7 @@ namespace Meridian59.TuiClient
             int dlgX = (Console.WindowWidth - dlgW) / 2;
             int dlgY = Math.Max(5, (Console.WindowHeight - dlgH) / 2);
             dlgH = Math.Min(dlgH, Console.WindowHeight - 3 - dlgY);
+            if (!EnsurePopupLocked(dlgX, dlgY, dlgW, dlgH)) return;
 
             buySelectedIndex = Math.Clamp(buySelectedIndex, 0, Math.Max(0, items.Count - 1));
 
@@ -2348,6 +2353,7 @@ namespace Meridian59.TuiClient
             int dlgX = (Console.WindowWidth - dlgW) / 2;
             int dlgY = Math.Max(5, (Console.WindowHeight - dlgH) / 2);
             dlgH = Math.Min(dlgH, Console.WindowHeight - 3 - dlgY);
+            if (!EnsurePopupLocked(dlgX, dlgY, dlgW, dlgH)) return;
 
             offerSelectedIndex = Math.Clamp(offerSelectedIndex, 0, Math.Max(0, inventory.Count - 1));
 
@@ -2438,6 +2444,7 @@ namespace Meridian59.TuiClient
             int dlgX = (Console.WindowWidth - dlgW) / 2;
             int dlgY = Math.Max(5, (Console.WindowHeight - dlgH) / 2);
             dlgH = Math.Min(dlgH, Console.WindowHeight - 3 - dlgY);
+            if (!EnsurePopupLocked(dlgX, dlgY, dlgW, dlgH)) return;
 
             spellTargetSelectedIndex = Math.Clamp(spellTargetSelectedIndex, 0, Math.Max(0, items.Count - 1));
 
@@ -2502,13 +2509,14 @@ namespace Meridian59.TuiClient
             // Re-filter live so objects that left the room are removed
             var liveIDs = new HashSet<uint>(Data.RoomObjects.Select(o => o.ID));
             lookCandidates = lookCandidates.Where(o => liveIDs.Contains(o.ID)).ToList();
-            if (lookCandidates.Count == 0) { activePopup = PopupMode.None; popupJustClosed = true; DrawMap(); return; }
+            if (lookCandidates.Count == 0) { SetActivePopup(PopupMode.None); popupJustClosed = true; DrawMap(); return; }
             var candidates = lookCandidates;
             int dlgW = Math.Min(50, Console.WindowWidth - 4);
             int dlgH = Math.Min(candidates.Count + 6, Console.WindowHeight - 4);
             int dlgX = (Console.WindowWidth - dlgW) / 2;
             int dlgY = Math.Max(5, (Console.WindowHeight - dlgH) / 2);
             dlgH = Math.Min(dlgH, Console.WindowHeight - 3 - dlgY);
+            if (!EnsurePopupLocked(dlgX, dlgY, dlgW, dlgH)) return;
             lookSelectedIndex = Math.Clamp(lookSelectedIndex, 0, Math.Max(0, candidates.Count - 1));
 
             Console.ForegroundColor = ConsoleColor.Cyan;
@@ -2551,13 +2559,14 @@ namespace Meridian59.TuiClient
             // Re-filter live against RoomObjects so picked-up items vanish immediately
             var liveIDs = new HashSet<uint>(Data.RoomObjects.Select(o => o.ID));
             getCandidates = getCandidates.Where(o => liveIDs.Contains(o.ID)).ToList();
-            if (getCandidates.Count == 0) { activePopup = PopupMode.None; popupJustClosed = true; DrawMap(); return; }
+            if (getCandidates.Count == 0) { SetActivePopup(PopupMode.None); popupJustClosed = true; DrawMap(); return; }
             var candidates = getCandidates;
             int dlgW = Math.Min(52, Console.WindowWidth - 4);
             int dlgH = Math.Min(candidates.Count + 7, Console.WindowHeight - 4);
             int dlgX = (Console.WindowWidth - dlgW) / 2;
             int dlgY = Math.Max(5, (Console.WindowHeight - dlgH) / 2);
             dlgH = Math.Min(dlgH, Console.WindowHeight - 3 - dlgY);
+            if (!EnsurePopupLocked(dlgX, dlgY, dlgW, dlgH)) return;
             getSelectedIndex = Math.Clamp(getSelectedIndex, 0, Math.Max(0, candidates.Count - 1));
 
             Console.ForegroundColor = ConsoleColor.Yellow;
@@ -2650,6 +2659,7 @@ namespace Meridian59.TuiClient
 
             // Resize dialog to content
             dlgH = Math.Min(lines.Count + 4, Console.WindowHeight - 3 - dlgY);
+            if (!EnsurePopupLocked(dlgX, dlgY, dlgW, dlgH)) return;
 
             Console.ForegroundColor = ConsoleColor.Cyan;
             Console.SetCursorPosition(dlgX, dlgY);
@@ -2687,6 +2697,7 @@ namespace Meridian59.TuiClient
             int dlgX = (Console.WindowWidth  - dlgW) / 2;
             int dlgY = Math.Max(5, (Console.WindowHeight - dlgH) / 2);
             dlgH = Math.Min(dlgH, Console.WindowHeight - 3 - dlgY);
+            if (!EnsurePopupLocked(dlgX, dlgY, dlgW, dlgH)) return;
 
             Console.ForegroundColor = ConsoleColor.Cyan;
             Console.SetCursorPosition(dlgX, dlgY);
@@ -2866,6 +2877,7 @@ namespace Meridian59.TuiClient
             int dlgX = (Console.WindowWidth  - dlgW) / 2;
             int dlgY = Math.Max(5, (Console.WindowHeight - dlgH) / 2);
             dlgH = Math.Min(dlgH, Console.WindowHeight - 3 - dlgY);
+            if (!EnsurePopupLocked(dlgX, dlgY, dlgW, dlgH)) return;
 
             bool isConfirm = (activePopup == PopupMode.StatChangeConfirm);
 
@@ -3082,6 +3094,7 @@ namespace Meridian59.TuiClient
              int dlgX = (Console.WindowWidth  - dlgW) / 2;
              int dlgY = 5;
              dlgH = Math.Min(dlgH, Console.WindowHeight - 3 - dlgY);
+             if (!EnsurePopupLocked(dlgX, dlgY, dlgW, dlgH)) return;
 
 
             Console.ForegroundColor = ConsoleColor.Cyan;
@@ -3281,6 +3294,41 @@ namespace Meridian59.TuiClient
             Console.ResetColor();
         }
 
+        /// <summary>
+        /// Change the active popup. Handles renderer lock/unlock and dirty flag.
+        /// Always use this instead of assigning activePopup directly.
+        /// </summary>
+        private void SetActivePopup(PopupMode mode)
+        {
+            if (mode == activePopup) return;
+            // Unlock renderer when closing or switching popups
+            if (popupLocked)
+            {
+                renderer.UnlockRegion();
+                popupLocked = false;
+            }
+            activePopup = mode;
+            popupDirty  = true;
+        }
+
+        /// <summary>
+        /// Called by each popup draw method with its computed rect.
+        /// Sets the renderer lock once per popup session and gates redraw on popupDirty.
+        /// Returns true if the popup should proceed with a full redraw.
+        /// </summary>
+        private bool EnsurePopupLocked(int dlgX, int dlgY, int dlgW, int dlgH)
+        {
+            if (!popupLocked)
+            {
+                renderer.LockRegion(dlgX, dlgY, dlgW, dlgH);
+                popupLocked = true;
+                popupDirty  = true; // first draw always needed
+            }
+            if (!popupDirty) return false;
+            popupDirty = false;
+            return true;
+        }
+
         private void DrawPopup(int startX, int startY, int width, int height)
         {
             if (activePopup == PopupMode.CharSheet)
@@ -3347,6 +3395,7 @@ namespace Meridian59.TuiClient
             int w = Console.WindowWidth;
             if (startX + width > w - 1) width = w - 1 - startX;
             if (width < 5) return;
+            if (!EnsurePopupLocked(startX, startY, width, height)) return;
 
             // 1. Window Frame
             Console.SetCursorPosition(startX, startY);
@@ -3491,6 +3540,7 @@ namespace Meridian59.TuiClient
 
         private void ProcessPopupKeyPress(ConsoleKeyInfo key)
         {
+            popupDirty = true; // any keypress requires a redraw
             // ── Login dialog ─────────────────────────────────────────────────────
             if (activePopup == PopupMode.Login)
             {
@@ -3513,7 +3563,7 @@ namespace Meridian59.TuiClient
                         else if (!string.IsNullOrEmpty(loginUsername) && !string.IsNullOrEmpty(loginPassword))
                         {
                             // Close popup and send credentials
-                            activePopup = PopupMode.None;
+                            SetActivePopup(PopupMode.None);
                             DrawMap();
                             SendLoginMessage(loginUsername, loginPassword);
                         }
@@ -3560,13 +3610,13 @@ namespace Meridian59.TuiClient
                             if (sel.IsEmptySlot)
                             {
                                 // Request char creation info for this slot
-                                activePopup = PopupMode.None;
+                                SetActivePopup(PopupMode.None);
                                 charCreationState = CharCreationState.AwaitingCharInfo;
                                 SendSystemMessageSendCharInfo(sel.ID);
                             }
                             else
                             {
-                                activePopup = PopupMode.None;
+                                SetActivePopup(PopupMode.None);
                                 popupJustClosed = true;
                                 Data.ExpectedAvatarName = sel.Name;
                                 SendUseCharacterMessage(new ObjectID(sel.ID), true, sel.Name);
@@ -3578,7 +3628,7 @@ namespace Meridian59.TuiClient
                         var emptySlot = charSelectList.FirstOrDefault(c => c.IsEmptySlot);
                         if (emptySlot != null)
                         {
-                            activePopup = PopupMode.None;
+                            SetActivePopup(PopupMode.None);
                             charCreationState = CharCreationState.AwaitingCharInfo;
                             SendSystemMessageSendCharInfo(emptySlot.ID);
                         }
@@ -3601,13 +3651,13 @@ namespace Meridian59.TuiClient
                         case ConsoleKey.Enter:
                             // Send it
                             SendChangedStatsMessage();
-                            activePopup = PopupMode.None;
+                            SetActivePopup(PopupMode.None);
                             popupJustClosed = true;
                             Log("SYS", "Stat change submitted.");
                             DrawMap();
                             break;
                         case ConsoleKey.Escape:
-                            activePopup = PopupMode.StatChange;
+                            SetActivePopup(PopupMode.StatChange);
                             DrawMap();
                             break;
                     }
@@ -3648,7 +3698,7 @@ namespace Meridian59.TuiClient
                 switch (key.Key)
                 {
                     case ConsoleKey.Escape:
-                        activePopup = PopupMode.None;
+                        SetActivePopup(PopupMode.None);
                         popupJustClosed = true;
                         DrawMap();
                         break;
@@ -3672,7 +3722,7 @@ namespace Meridian59.TuiClient
                         break;
                     case ConsoleKey.Tab:
                         // Advance to confirm screen
-                        activePopup = PopupMode.StatChangeConfirm;
+                        SetActivePopup(PopupMode.StatChangeConfirm);
                         DrawMap();
                         break;
                 }
@@ -3742,7 +3792,7 @@ namespace Meridian59.TuiClient
                 switch (key.Key)
                 {
                     case ConsoleKey.Escape:
-                        activePopup = PopupMode.None;
+                        SetActivePopup(PopupMode.None);
                         popupJustClosed = true;
                         ResetCharCreation();
                         DrawMap();
@@ -3857,7 +3907,7 @@ namespace Meridian59.TuiClient
                 switch (key.Key)
                 {
                     case ConsoleKey.Escape:
-                        activePopup = PopupMode.None;
+                        SetActivePopup(PopupMode.None);
                         popupJustClosed = true;
                         DrawMap();
                         break;
@@ -3890,7 +3940,7 @@ namespace Meridian59.TuiClient
                 switch (key.Key)
                 {
                     case ConsoleKey.Escape:
-                        activePopup = PopupMode.None;
+                        SetActivePopup(PopupMode.None);
                         popupJustClosed = true;
                         offerPendingIDs.Clear();
                         DrawMap();
@@ -3936,7 +3986,7 @@ namespace Meridian59.TuiClient
                     case ConsoleKey.A:
                         SendAcceptOffer();
                         Log("SYS", "Offer accepted.");
-                        activePopup = PopupMode.None;
+                        SetActivePopup(PopupMode.None);
                         popupJustClosed = true;
                         offerPendingIDs.Clear();
                         DrawMap();
@@ -3944,7 +3994,7 @@ namespace Meridian59.TuiClient
                     case ConsoleKey.C:
                         SendCancelOffer();
                         Log("SYS", "Offer cancelled.");
-                        activePopup = PopupMode.None;
+                        SetActivePopup(PopupMode.None);
                         popupJustClosed = true;
                         offerPendingIDs.Clear();
                         DrawMap();
@@ -3964,7 +4014,7 @@ namespace Meridian59.TuiClient
                 switch (key.Key)
                 {
                     case ConsoleKey.Escape:
-                        activePopup = PopupMode.None;
+                        SetActivePopup(PopupMode.None);
                         popupJustClosed = true;
                         DrawMap();
                         break;
@@ -3989,7 +4039,7 @@ namespace Meridian59.TuiClient
                             Data.TargetID = target.ID;
                             SendReqCastMessage(spellTargetSpellID);
                             Log("SYS", $"Casting on: {target.Name}");
-                            activePopup = PopupMode.None;
+                            SetActivePopup(PopupMode.None);
                             popupJustClosed = true;
                             DrawMap();
                         }
@@ -4000,7 +4050,7 @@ namespace Meridian59.TuiClient
                         SendReqCastMessage(spellTargetSpellID);
                         Log("SYS", $"Casting on self.");
                         Data.SelfTarget = false;
-                        activePopup = PopupMode.None;
+                        SetActivePopup(PopupMode.None);
                         popupJustClosed = true;
                         DrawMap();
                         break;
@@ -4013,7 +4063,7 @@ namespace Meridian59.TuiClient
                 switch (key.Key)
                 {
                     case ConsoleKey.Escape:
-                        activePopup = PopupMode.None;
+                        SetActivePopup(PopupMode.None);
                         popupJustClosed = true;
                         DrawMap();
                         break;
@@ -4029,7 +4079,7 @@ namespace Meridian59.TuiClient
                         if (lookCandidates.Count > 0)
                         {
                             var target = lookCandidates[lookSelectedIndex];
-                            activePopup = PopupMode.None;
+                            SetActivePopup(PopupMode.None);
                             SendReqLookMessage(target.ID);
                             // LookDetail will open via PropertyChanged when server responds
                         }
@@ -4043,7 +4093,7 @@ namespace Meridian59.TuiClient
                 // Any key closes it
                 Data.LookObject.IsVisible = false;
                 Data.LookPlayer.IsVisible = false;
-                activePopup = PopupMode.None;
+                SetActivePopup(PopupMode.None);
                 popupJustClosed = true;
                 DrawMap();
                 return;
@@ -4052,7 +4102,7 @@ namespace Meridian59.TuiClient
             if (activePopup == PopupMode.Help)
             {
                 // Any key closes it
-                activePopup = PopupMode.None;
+                SetActivePopup(PopupMode.None);
                 popupJustClosed = true;
                 DrawMap();
                 return;
@@ -4063,7 +4113,7 @@ namespace Meridian59.TuiClient
                 switch (key.Key)
                 {
                     case ConsoleKey.Escape:
-                        activePopup = PopupMode.None;
+                        SetActivePopup(PopupMode.None);
                         popupJustClosed = true;
                         DrawMap();
                         break;
@@ -4082,7 +4132,7 @@ namespace Meridian59.TuiClient
                             SendReqGetMessage(new ObjectID(obj.ID));
                             if (recorder.IsRecording) recorder.RecordGet(Data.AvatarObject, obj.Name ?? obj.ID.ToString());
                             Log("SYS", $"Getting: {obj.Name}");
-                            activePopup = PopupMode.None;
+                            SetActivePopup(PopupMode.None);
                             popupJustClosed = true;
                             DrawMap();
                         }
@@ -4095,7 +4145,7 @@ namespace Meridian59.TuiClient
                             if (recorder.IsRecording) recorder.RecordGet(Data.AvatarObject, obj.Name ?? obj.ID.ToString());
                         }
                         Log("SYS", $"Getting all {getCandidates.Count} item(s).");
-                        activePopup = PopupMode.None;
+                        SetActivePopup(PopupMode.None);
                         popupJustClosed = true;
                         DrawMap();
                         break;
@@ -4110,7 +4160,7 @@ namespace Meridian59.TuiClient
                 switch (key.Key)
                 {
                     case ConsoleKey.Escape:
-                        activePopup = PopupMode.None;
+                        SetActivePopup(PopupMode.None);
                         popupJustClosed = true;
                         charScrollOffset = 0;
                         DrawMap();
@@ -4173,7 +4223,7 @@ namespace Meridian59.TuiClient
                                     spellTargetSpellID = chosen.ObjectID;
                                     spellTargetSelectedIndex = 0;
                                     spellTargetInventory = true;
-                                    activePopup = PopupMode.SpellTarget;
+                                    SetActivePopup(PopupMode.SpellTarget);
                                     Log("SYS", $"Pick target for: {chosen.ResourceName}");
                                 }
                                 else
@@ -4261,12 +4311,12 @@ namespace Meridian59.TuiClient
             switch (key.Key)
             {
                 case ConsoleKey.Escape:
-                    if (activePopup == PopupMode.MailRead) activePopup = PopupMode.MailList;
-                    else if (activePopup == PopupMode.NewsRead) activePopup = PopupMode.NewsList;
+                    if (activePopup == PopupMode.MailRead) SetActivePopup(PopupMode.MailList);
+                    else if (activePopup == PopupMode.NewsRead) SetActivePopup(PopupMode.NewsList);
                     else {
                         if (activePopup == PopupMode.NewsList)
                             Data.NewsGroup.IsVisible = false;
-                        activePopup = PopupMode.None;
+                        SetActivePopup(PopupMode.None);
                         popupJustClosed = true;
                     }
                     popupScrollOffset = 0;
@@ -4307,7 +4357,7 @@ namespace Meridian59.TuiClient
                         if (popupSelectedIndex < mails.Count)
                         {
                             var m = mails[popupSelectedIndex];
-                            activePopup = PopupMode.MailCompose;
+                            SetActivePopup(PopupMode.MailCompose);
                             composeRecipient = m.Sender;
                             composeSubject = m.Title.StartsWith("Re:", StringComparison.OrdinalIgnoreCase) ? m.Title : "Re: " + m.Title;
                             composeBody = new List<string> { "" };
@@ -4317,7 +4367,7 @@ namespace Meridian59.TuiClient
                     }
                     else if (activePopup == PopupMode.MailRead && currentPopupItem is Mail rm)
                     {
-                        activePopup = PopupMode.MailCompose;
+                        SetActivePopup(PopupMode.MailCompose);
                         composeRecipient = rm.Sender;
                         composeSubject = rm.Title.StartsWith("Re:", StringComparison.OrdinalIgnoreCase) ? rm.Title : "Re: " + rm.Title;
                         composeBody = new List<string> { "" };
@@ -4327,7 +4377,7 @@ namespace Meridian59.TuiClient
                     else if (activePopup == PopupMode.NewsList && popupSelectedIndex < Data.NewsGroup.Articles.Count)
                     {
                         var art = Data.NewsGroup.Articles[popupSelectedIndex];
-                        activePopup = PopupMode.NewsCompose;
+                        SetActivePopup(PopupMode.NewsCompose);
                         composeSubject = art.Title.StartsWith("Re:", StringComparison.OrdinalIgnoreCase) ? art.Title : "Re: " + art.Title;
                         composeBody = new List<string> { "" };
                         composeState = 2; 
@@ -4338,7 +4388,7 @@ namespace Meridian59.TuiClient
                 case ConsoleKey.N:
                     if (activePopup == PopupMode.MailList || activePopup == PopupMode.MailRead)
                     {
-                        activePopup = PopupMode.MailCompose;
+                        SetActivePopup(PopupMode.MailCompose);
                         composeRecipient = "";
                         composeSubject = "";
                         composeBody = new List<string> { "" };
@@ -4347,7 +4397,7 @@ namespace Meridian59.TuiClient
                     }
                     else if (activePopup == PopupMode.NewsList || activePopup == PopupMode.NewsRead)
                     {
-                        activePopup = PopupMode.NewsCompose;
+                        SetActivePopup(PopupMode.NewsCompose);
                         composeSubject = "";
                         composeBody = new List<string> { "" };
                         composeState = 1;
@@ -4409,7 +4459,7 @@ namespace Meridian59.TuiClient
                         if (popupSelectedIndex < mails.Count)
                         {
                             currentPopupItem = mails[popupSelectedIndex];
-                            activePopup = PopupMode.MailRead;
+                            SetActivePopup(PopupMode.MailRead);
                             popupScrollOffset = 0;
                         }
                     }
@@ -4417,7 +4467,7 @@ namespace Meridian59.TuiClient
                     {
                         var art = Data.NewsGroup.Articles[popupSelectedIndex];
                         currentPopupItem = art;
-                        activePopup = PopupMode.NewsRead;
+                        SetActivePopup(PopupMode.NewsRead);
                         popupScrollOffset = 0;
                         SendReqArticle(Data.NewsGroup.NewsGlobeID, art.Number);
                     }
@@ -4482,7 +4532,7 @@ namespace Meridian59.TuiClient
             {
                 Log("SYS", "Posting to newsgroup...");
                 SendPostArticle(Data.NewsGroup.NewsGlobeID, composeSubject, body);
-                activePopup = PopupMode.NewsList;
+                SetActivePopup(PopupMode.NewsList);
             }
         }
 
@@ -4496,7 +4546,7 @@ namespace Meridian59.TuiClient
                     string body = string.Join("\n", composeBody.Where(s => !string.IsNullOrEmpty(s)));
                     SendSendMail(new[] { Message.ResolvedIDs[0] }, composeSubject, body);
                     Log("SYS", "Mail sent.");
-                    activePopup = PopupMode.MailList;
+                    SetActivePopup(PopupMode.MailList);
                     DrawMap();
                 }
                 else
@@ -4670,7 +4720,7 @@ namespace Meridian59.TuiClient
 
             lookCandidates    = candidates;
             lookSelectedIndex = 0;
-            activePopup       = PopupMode.LookList;
+            SetActivePopup(PopupMode.LookList);
             DrawMap();
         }
 
@@ -4721,7 +4771,7 @@ namespace Meridian59.TuiClient
             // Multiple items — open picker popup
             getCandidates    = candidates;
             getSelectedIndex = 0;
-            activePopup      = PopupMode.GetList;
+            SetActivePopup(PopupMode.GetList);
             DrawMap();
         }
 
@@ -4778,7 +4828,7 @@ namespace Meridian59.TuiClient
 
                 case TuiAction.OpenCharSheet:
                     SendReqInventoryMessage(); // refresh inventory before showing
-                    activePopup = PopupMode.CharSheet;
+                    SetActivePopup(PopupMode.CharSheet);
                     charTab = CharTab.Stats;
                     charScrollOffset = 0;
                     DrawMap();
@@ -4901,7 +4951,7 @@ namespace Meridian59.TuiClient
             if (text.Equals("help", StringComparison.OrdinalIgnoreCase) ||
                 text.Equals("?",    StringComparison.OrdinalIgnoreCase))
             {
-                activePopup = PopupMode.Help;
+                SetActivePopup(PopupMode.Help);
                 DrawMap();
                 return;
             }
@@ -4960,7 +5010,7 @@ namespace Meridian59.TuiClient
 
             if (text.Equals("/mail", StringComparison.OrdinalIgnoreCase))
             {
-                activePopup = PopupMode.MailList;
+                SetActivePopup(PopupMode.MailList);
                 popupSelectedIndex = 0;
                 popupScrollOffset = 0;
                 SendReqGetMail();
@@ -4970,7 +5020,7 @@ namespace Meridian59.TuiClient
 
             if (text.Equals("/news", StringComparison.OrdinalIgnoreCase))
             {
-                activePopup = PopupMode.NewsList;
+                SetActivePopup(PopupMode.NewsList);
                 popupSelectedIndex = 0;
                 popupScrollOffset = 0;
                 if (Data.NewsGroup.NewsGlobeID != 0) { Data.NewsGroup.Articles.Clear(); SendReqArticles(); }
@@ -5007,7 +5057,7 @@ namespace Meridian59.TuiClient
                 // Seed the TradePartner so the popup header shows the right name
                 Data.Trade.TradePartner = target;
                 Data.Trade.IsBackgroundOffer = false;
-                activePopup = PopupMode.Offer;
+                SetActivePopup(PopupMode.Offer);
                 DrawMap();
                 return;
             }
@@ -5522,7 +5572,7 @@ namespace Meridian59.TuiClient
                 : (info.FemaleMouthIDs.Length> 0 ? p.Mouth % info.FemaleMouthIDs.Length: 0);
             info.SetExampleModel(info.Gender, skinIdx, hairColorIdx, hairIdx, eyesIdx, noseIdx, mouthIdx);
 
-            activePopup = PopupMode.None;
+            SetActivePopup(PopupMode.None);
             popupJustClosed = true;
             SendSystemMessageNewCharInfo();
             ResetCharCreation();

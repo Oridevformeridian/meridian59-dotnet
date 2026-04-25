@@ -16,6 +16,40 @@ namespace Meridian59.TuiClient
         private int lastHeight;
         private volatile bool invalidatePending = false;
 
+        // Console-space locked region — renderer skips these cells entirely
+        private bool hasLockedRegion = false;
+        private int lockedConsoleX, lockedConsoleY, lockedW, lockedH;
+
+        /// <summary>
+        /// Lock a console-space rectangle. The renderer will not write to these cells,
+        /// letting the popup own them exclusively.
+        /// </summary>
+        public void LockRegion(int consoleX, int consoleY, int w, int h)
+        {
+            lockedConsoleX = consoleX;
+            lockedConsoleY = consoleY;
+            lockedW        = w;
+            lockedH        = h;
+            hasLockedRegion = true;
+        }
+
+        /// <summary>
+        /// Release the lock and dirty the region in currentBuffer so the renderer
+        /// redraws the background on the next tick.
+        /// </summary>
+        public void UnlockRegion()
+        {
+            if (!hasLockedRegion) return;
+            hasLockedRegion = false;
+            // Dirty the region so the diff loop repaints it
+            if (currentBuffer != null)
+            {
+                for (int x = lockedConsoleX; x < lockedConsoleX + lockedW && x < currentBuffer.Width; x++)
+                    for (int y = lockedConsoleY; y < lockedConsoleY + lockedH && y < currentBuffer.Height; y++)
+                        currentBuffer.Cells[x, y].Char = '\0';
+            }
+        }
+
         // zoomLevel=0 → fits entire room in viewport; positive = zoom in, negative = zoom out.
         private int zoomLevel = -2;
         private const int ZOOM_MAX = 7;
@@ -276,6 +310,27 @@ namespace Meridian59.TuiClient
 
                     for (int x = 0; x < width; x++)
                     {
+                        // Skip cells owned by the popup lock
+                        if (hasLockedRegion)
+                        {
+                            int cx = consoleX + x, cy = consoleY + y;
+                            if (cx >= lockedConsoleX && cx < lockedConsoleX + lockedW &&
+                                cy >= lockedConsoleY && cy < lockedConsoleY + lockedH)
+                            {
+                                // Flush any pending run before the gap
+                                if (runStartX >= 0)
+                                {
+                                    if (runFg != currentColor)   { Console.ForegroundColor = runFg; currentColor   = runFg; }
+                                    if (runBg != currentBgColor) { Console.BackgroundColor = runBg; currentBgColor = runBg; }
+                                    Console.SetCursorPosition(consoleX + runStartX, consoleY + y);
+                                    Console.Write(runBuf.ToString());
+                                    runBuf.Clear();
+                                    runStartX = -1;
+                                }
+                                continue;
+                            }
+                        }
+
                         var next = nextBuffer.Cells[x, y];
                         var curr = currentBuffer.Cells[x, y];
                         char displayChar = TransformChar(next.Char, next.Intensity);
