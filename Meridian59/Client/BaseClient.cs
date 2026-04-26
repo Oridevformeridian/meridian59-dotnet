@@ -640,12 +640,12 @@ namespace Meridian59.Client
              * 
              * if something goes wrong here, connection establishing may hang
              */
-            
+             
             string modulefile;
             if (ResourceManager.StringResources.TryGetValue(Message.ResourceID, out modulefile, LanguageCode.English))
             {
                 Log("DEBUG", "LoadModule resource " + Message.ResourceID + " resolved to: " + modulefile);
-                if (String.Equals(modulefile, CHARDLL) || Message.ResourceID == 20055)
+                if (String.Equals(modulefile, CHARDLL))
                 {
                     SendSendCharactersMessage();
                 }
@@ -653,10 +653,11 @@ namespace Meridian59.Client
             else
             {
                 Log("DEBUG", "LoadModule resource " + Message.ResourceID + " NOT FOUND in StringResources");
-                // Fallback for known ID
-                if (Message.ResourceID == 20055)
+                // Fallback: if we don't have an avatar yet, this is likely char.dll
+                // during the login sequence.
+                if (Data.AvatarObject == null && Data.AvatarID == uint.MaxValue)
                 {
-                    Log("DEBUG", "Resource ID 20055 is known to be char.dll, requesting characters...");
+                    Log("DEBUG", "No avatar yet, requesting characters...");
                     SendSendCharactersMessage();
                 }
             }

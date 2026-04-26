@@ -1031,7 +1031,8 @@ namespace Meridian59.TuiClient
 
         protected override void HandleCharactersMessage(CharactersMessage Message)
         {
-            if (Data.UIMode == UIMode.Playing)
+            // Skip if we already have an avatar (duplicate message during gameplay)
+            if (Data.AvatarObject != null)
                 return;
 
             // Auto-select if a character is configured
