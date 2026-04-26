@@ -100,6 +100,11 @@ namespace Meridian59.TuiClient
         private DateTime lastKeyMoveTime = DateTime.MinValue;
         private const int KEY_HOLD_TIMEOUT_MS = 150;
 
+        // Autoreconnect
+        private int reconnectAttempts = 0;
+        private const int MaxReconnectAttempts = 3;
+        private DateTime reconnectAfter = DateTime.MinValue;
+
         private int lastWindowWidth;
         private int lastWindowHeight;
         private uint lastRoomID = 0;
@@ -113,6 +118,7 @@ namespace Meridian59.TuiClient
         private bool popupJustClosed = false;
         private bool popupDirty = true;    // true = popup needs a full redraw
         private bool popupLocked = false;  // true = renderer lock has been set for current popup
+        private DateTime lookDetailOpenedAt = DateTime.MinValue; // guard against Enter echo closing LookDetail immediately
         private CharTab charTab = CharTab.Stats;
         private int charScrollOffset = 0;
         private int charSelectionIndex = 0;
@@ -168,6 +174,13 @@ namespace Meridian59.TuiClient
 
         // Combat state
         private bool autoAttack = false;
+        private bool defendMode = false;
+        private const float DEFEND_STOP_DIST_KOD = 64f;  // 1 grid square — stop when this close
+
+        // Follow state
+        private RoomObject followTarget = null;
+        private const float FOLLOW_STOP_DIST_KOD = 128f; // 2 tiles — stop when this close
+        private const float FOLLOW_LEASH_DIST_KOD = 192f; // >3 tiles — start moving
         private bool showWhoList = false;
         private bool soundEnabled = false;
         private int lastAvatarHP = -1;
@@ -182,10 +195,11 @@ namespace Meridian59.TuiClient
         private uint drainUnboundSpellID = 0;
         private string drainUnboundSpellName = "";
 
-        // HP flash state — flashes bar white→red for a short burst on damage
-        private int    hpFlashFrames  = 0;   // countdown frames remaining
-        private bool   hpFlashPhase   = false; // alternates bar color each draw
-        private const int HP_FLASH_FRAMES = 8; // ~800ms at 100ms tick
+         // HP flash state — flashes bar white→red for a short burst on damage
+         private int    hpFlashFrames  = 0;   // countdown frames remaining
+         private bool   hpFlashPhase   = false; // alternates bar color each draw
+         private const int HP_FLASH_FRAMES = 8; // ~800ms at 100ms tick
+ 
 
         // Composition State
         private string composeRecipient = "";
@@ -338,6 +352,20 @@ namespace Meridian59.TuiClient
         protected override void OnServerConnectionException(Exception Error)
         {
             Log("ERROR", "Connection error: " + Error.Message);
+
+            if (Config.SelectedConnectionInfo == null ||
+                string.IsNullOrEmpty(Config.SelectedConnectionInfo.Username))
+                return;
+
+            if (reconnectAttempts < MaxReconnectAttempts)
+            {
+                Log("SYS", $"Reconnecting... (attempt {reconnectAttempts + 1}/{MaxReconnectAttempts})");
+                reconnectAfter = DateTime.UtcNow.AddMilliseconds(500);
+            }
+            else
+            {
+                Log("ERROR", $"Connection lost — gave up after {MaxReconnectAttempts} reconnect attempts.");
+            }
         }
 
         protected override void HandleLoginModeMessage(LoginModeMessage Message)
@@ -444,6 +472,7 @@ namespace Meridian59.TuiClient
                      if (activePopup == PopupMode.NewsList || activePopup == PopupMode.NewsRead)
                          return;
                      SetActivePopup(PopupMode.LookDetail);
+                     lookDetailOpenedAt = DateTime.UtcNow;
                      DrawMap();
                  }
              };
@@ -453,6 +482,7 @@ namespace Meridian59.TuiClient
                  if (e.PropertyName == "IsVisible" && Data.LookPlayer.IsVisible)
                  {
                      SetActivePopup(PopupMode.LookDetail);
+                     lookDetailOpenedAt = DateTime.UtcNow;
                      DrawMap();
                  }
              };
@@ -461,9 +491,9 @@ namespace Meridian59.TuiClient
             Data.PropertyChanged += (s, e) => {
                 if (e.PropertyName == "RoomInformation" || e.PropertyName == "AvatarObject")
                 {
-                    DrawRoomInfo();
-                    DrawBuffs();
-                    DrawMap();
+                    if (!HasTty) return;
+                    renderer.Invalidate();
+                    lock (consoleLock) { DrawRoomInfo(); DrawBuffs(); DrawMap(); }
                 }
             };
 
@@ -489,6 +519,17 @@ namespace Meridian59.TuiClient
                 base.Update();
             }
             catch (InvalidOperationException) { /* no TTY */ }
+
+            // Autoreconnect: fire deferred reconnect once the delay has elapsed
+            if (reconnectAfter != DateTime.MinValue && DateTime.UtcNow >= reconnectAfter)
+            {
+                reconnectAfter = DateTime.MinValue;
+                reconnectAttempts++;
+                Log("SYS", $"Reconnect attempt {reconnectAttempts}/{MaxReconnectAttempts}...");
+                Data.Reset();
+                Data.UIMode = UIMode.Login;
+                Connect();
+            }
 
             replayer?.Update();
             ProcessScriptQueue();
@@ -537,42 +578,53 @@ namespace Meridian59.TuiClient
                 }
             }
 
-            // Convey-all macro: drain one item per 500ms, only consume when cast can fire
-            while (conveyQueue.Count > 0 && DateTime.Now >= conveyNextCastTime)
-            {
-                uint itemID = conveyQueue.Peek();
-                // Skip items that were already removed from inventory (consumed by a prior cast)
-                var item = Data.InventoryObjects.GetItemByID(itemID);
-                if (item == null)
-                {
-                    conveyQueue.Dequeue();
-                    continue;
-                }
-                // Wait for cast cooldown — don't consume the item until we can actually send
-                if (!GameTick.CanReqCast())
-                    break;
-                conveyQueue.Dequeue();
-                Data.SelfTarget = false;
-                Data.TargetID = itemID;
-                SendReqCastMessage(conveySpellID);
-                Log("SYS", $"[Convey] {item.Name} ({conveyQueue.Count} remaining)");
-                conveyNextCastTime = DateTime.Now.AddMilliseconds(500);
-                break;
-            }
+             // Convey-all macro: one cast per tick, item stays at head of queue until
+             // InventoryRemove confirms it's gone — prevents skipping items when the
+             // server rejects a cast (its cooldown > client CanReqCast window).
+             if (conveyQueue.Count > 0 && DateTime.Now >= conveyNextCastTime)
+             {
+                 uint itemID = conveyQueue.Peek();
+                 var item = Data.InventoryObjects.GetItemByID(itemID);
+                 if (item == null)
+                 {
+                     // Item already gone from inventory — confirmed conveyed, advance queue
+                     conveyQueue.Dequeue();
+                 }
+                 else if (GameTick.CanReqCast())
+                 {
+                     // Item still in inventory and cast ready — (re)cast and wait for confirmation
+                     Data.SelfTarget = false;
+                     Data.TargetID = itemID;
+                     SendReqCastMessage(conveySpellID);
+                     Log("SYS", $"[Convey] {item.Name} ({conveyQueue.Count - 1} remaining)");
+                     conveyNextCastTime = DateTime.Now.AddMilliseconds(750);
+                 }
+                 // else: cast cooldown not ready, try again next tick
+             }
 
-            // Drain-unbound: self-cast a spell at max rate whenever not targeting a creature
-            if (drainUnbound && drainUnboundSpellID != 0)
-            {
-                var drainTgt = Data.TargetObject as RoomObject;
-                bool combatTarget = drainTgt != null &&
-                                    (drainTgt.Flags.IsCreature || drainTgt.Flags.IsAttackable);
-                if (!combatTarget && GameTick.CanReqCast())
-                {
-                    Data.SelfTarget = true;
-                    SendReqCastMessage(drainUnboundSpellID);
-                    Data.SelfTarget = false;
-                }
-            }
+             // Drain-unbound: self-cast a spell at max rate whenever not targeting a creature
+             if (drainUnbound && drainUnboundSpellID != 0)
+             {
+                 var unboundForDrain = Data.AvatarAttributes.FirstOrDefault(s =>
+                     s.ResourceName.IndexOf("unbound", StringComparison.OrdinalIgnoreCase) >= 0);
+                 if (unboundForDrain != null && unboundForDrain.ValueCurrent <= 0)
+                 {
+                     drainUnbound = false;
+                     Log("SYS", "[DrainUnbound] Stopped — unbound energy depleted.");
+                 }
+                 else
+                 {
+                     var drainTgt = Data.TargetObject as RoomObject;
+                     bool combatTarget = drainTgt != null &&
+                                         (drainTgt.Flags.IsCreature || drainTgt.Flags.IsAttackable);
+                     if (!combatTarget && GameTick.CanReqCast())
+                     {
+                         Data.SelfTarget = true;
+                         SendReqCastMessage(drainUnboundSpellID);
+                         Data.SelfTarget = false;
+                     }
+                 }
+             }
 
             // Combat tick — runs regardless of TTY
             if (autoAttack)
@@ -585,12 +637,13 @@ namespace Meridian59.TuiClient
                 }
 
                 // Auto-target as soon as any mob acquires aggro on us (MM_AGGRO_SELF),
-                // even before a hit lands. Fall back to nearest if nothing has aggro.
+                // or on our follow target (MM_AGGRO_OTHER). Fall back to nearest if nothing has aggro.
                 if (Data.TargetObject == null)
                 {
                     var aggressor = Data.RoomObjects
                         .OfType<RoomObject>()
-                        .Where(o => o.Flags.IsMinimapAggroSelf)
+                        .Where(o => o.Flags.IsMinimapAggroSelf ||
+                            (followTarget != null && o.Flags.IsMinimapAggroOther))
                         .OrderBy(o => {
                             var av = Data.AvatarObject;
                             if (av == null) return float.MaxValue;
@@ -635,7 +688,86 @@ namespace Meridian59.TuiClient
                 if (nonCombatHP >= 0) lastAvatarHP = nonCombatHP;
             }
 
-            // UI rendering only when TTY is available
+            // Defend mode: approach the closest aggressor to melee range (1 tile),
+            // facing them each tick. autoAttack fires the actual hits.
+            if (defendMode)
+            {
+                var av = Data.AvatarObject;
+                var target = Data.TargetObject as RoomObject;
+
+                // Pick best target: prefer current target if it has aggro, else nearest aggressor
+                if (target == null || !target.Flags.IsMinimapAggroSelf)
+                {
+                    target = Data.RoomObjects
+                        .OfType<RoomObject>()
+                        .Where(o => o.Flags.IsMinimapAggroSelf && o.Flags.IsAttackable)
+                        .OrderBy(o => {
+                            float ddx = o.CoordinateX - av.CoordinateX;
+                            float ddz = o.CoordinateY - av.CoordinateY;
+                            return ddx * ddx + ddz * ddz;
+                        })
+                        .FirstOrDefault();
+                    if (target != null)
+                    {
+                        Data.SelfTarget = false;
+                        Data.TargetID = target.ID;
+                    }
+                }
+
+                if (av != null && target != null && GameTick.CanReqMove())
+                {
+                    float ddx = target.CoordinateX - av.CoordinateX;
+                    float ddz = target.CoordinateY - av.CoordinateY;
+                    float dist = (float)Math.Sqrt(ddx * ddx + ddz * ddz);
+
+                    FaceTarget(target);
+
+                    if (dist > DEFEND_STOP_DIST_KOD)
+                    {
+                        // Normalise direction to cardinal/diagonal then move one step
+                        int sdx = ddx > 0 ? 1 : ddx < 0 ? -1 : 0;
+                        int sdz = ddz > 0 ? 1 : ddz < 0 ? -1 : 0;
+                        HandleMovement(sdx, sdz, cancelFollow: false);
+                    }
+                }
+            }
+
+            // Follow mode: stay within 2 tiles of followTarget, defend both self and target
+            if (followTarget != null)
+            {
+                var av = Data.AvatarObject;
+
+                // Check if followTarget is still in the room
+                var currentFollow = Data.RoomObjects
+                    .OfType<RoomObject>()
+                    .FirstOrDefault(o => o.ID == followTarget.ID);
+                if (currentFollow == null)
+                {
+                    Log("SYS", "Follow target left the room.");
+                    followTarget = null;
+                }
+                else if (av != null && GameTick.CanReqMove())
+                {
+                    followTarget = currentFollow; // refresh reference
+                    float fdx = followTarget.CoordinateX - av.CoordinateX;
+                    float fdz = followTarget.CoordinateY - av.CoordinateY;
+                    float followDist = (float)Math.Sqrt(fdx * fdx + fdz * fdz);
+
+                    if (followDist > FOLLOW_LEASH_DIST_KOD)
+                    {
+                        int sdx = fdx > 0 ? 1 : fdx < 0 ? -1 : 0;
+                        int sdz = fdz > 0 ? 1 : fdz < 0 ? -1 : 0;
+                        HandleMovement(sdx, sdz, cancelFollow: false);
+                    }
+                    else if (followDist > FOLLOW_STOP_DIST_KOD)
+                    {
+                        // Within leash range but not yet at stop distance — face target
+                        FaceTarget(followTarget);
+                    }
+                }
+            }
+
+
             if (!HasTty) return;
 
             lock (consoleLock)
@@ -653,6 +785,11 @@ namespace Meridian59.TuiClient
                 if (ri != null && ri.RoomID != lastRoomID)
                 {
                     lastRoomID = ri.RoomID;
+                    if (followTarget != null)
+                    {
+                        Log("SYS", "Follow cancelled — target left the room.");
+                        followTarget = null;
+                    }
                     layoutChanged = true;
                 }
 
@@ -928,6 +1065,7 @@ namespace Meridian59.TuiClient
         protected override void HandlePlayerMessage(PlayerMessage Message)
         {
             renderer.Invalidate();
+            reconnectAttempts = 0; // successfully in-game — reset reconnect counter
 
             // Data layer was already updated by BaseClient.HandleGameModeMessage before routing here.
             // Calling Data.HandleGameModeMessage again would double-invoke HandlePlayer (clears room objects twice).
@@ -992,10 +1130,13 @@ namespace Meridian59.TuiClient
                     Log("SYS", pMsg.Message.FullString);
                 }
             }
-            else if (pi == MessageTypeGameMode.Move && Message is MoveMessage m)
-            {
-                // Suppress movement log to avoid console pollution
-            }
+             else if (pi == MessageTypeGameMode.Move && Message is MoveMessage m)
+             {
+                 // If the server corrects our own position (wall bounce), invalidate
+                 // the renderer so the ghost avatar tile at the old position gets cleared.
+                 if (Data.AvatarObject != null && m.ObjectID == Data.AvatarID)
+                     renderer.Invalidate();
+             }
             else if (pi == MessageTypeGameMode.Characters && Message is CharactersMessage chars)
             {
                 // auto-selection handled in HandleCharactersMessage override
@@ -1299,46 +1440,111 @@ namespace Meridian59.TuiClient
                     flashEmpty:ConsoleColor.DarkGray,
                     flashing:  false);
 
-                // Unbound energy and training points from AvatarAttributes (matched by name)
-                var unboundStat  = Data.AvatarAttributes.FirstOrDefault(s =>
-                    s.ResourceName.IndexOf("unbound", StringComparison.OrdinalIgnoreCase) >= 0);
-                var trainingStat = Data.AvatarAttributes.FirstOrDefault(s =>
-                    s.ResourceName.IndexOf("train", StringComparison.OrdinalIgnoreCase) >= 0);
-                int unboundVal  = unboundStat  != null ? (int)unboundStat.ValueCurrent  : -1;
-                int trainingVal = trainingStat != null ? (int)trainingStat.ValueCurrent : -1;
+                 // Unbound energy and training points from AvatarAttributes (matched by name)
+                 var unboundStat  = Data.AvatarAttributes.FirstOrDefault(s =>
+                     s.ResourceName.IndexOf("unbound", StringComparison.OrdinalIgnoreCase) >= 0);
+                 var trainingStat = Data.AvatarAttributes.FirstOrDefault(s =>
+                     s.ResourceName.IndexOf("train", StringComparison.OrdinalIgnoreCase) >= 0);
+                 int unboundVal  = unboundStat  != null ? (int)unboundStat.ValueCurrent  : -1;
+                 int trainingVal = trainingStat != null ? (int)trainingStat.ValueCurrent : -1;
 
-                // RTT
-                Console.SetCursorPosition(17, 3);
-                Console.ForegroundColor = ConsoleColor.DarkGray;
-                Console.Write($"RTT:{ServerConnection.RTT,-3}  ");
+                 // RTT
+                 Console.SetCursorPosition(17, 3);
+                 Console.ForegroundColor = ConsoleColor.DarkGray;
+                 Console.Write($"RTT:{ServerConnection.RTT,-3}  ");
 
-                // RST / STD modal badge
-                if (Data.IsResting)
-                {
-                    Console.ForegroundColor = ConsoleColor.DarkYellow;
-                    Console.Write("RST");
-                }
-                else
-                {
-                    Console.ForegroundColor = ConsoleColor.DarkGreen;
-                    Console.Write("STD");
-                }
+                 // RST / STD modal badge
+                 if (Data.IsResting)
+                 {
+                     Console.ForegroundColor = ConsoleColor.DarkYellow;
+                     Console.Write("RST");
+                 }
+                 else
+                 {
+                     Console.ForegroundColor = ConsoleColor.DarkGreen;
+                     Console.Write("STD");
+                 }
 
-                // Unbound energy
-                Console.ForegroundColor = ConsoleColor.DarkGray;
-                Console.Write("  ");
-                if (unboundVal >= 0)
-                    Console.Write($"UNB:{unboundVal,-5}");
-                else
-                    Console.Write("          ");
+                 Console.ResetColor();
 
-                // Training points
-                if (trainingVal >= 0)
-                    Console.Write($"TRN:{trainingVal,-3}");
-                else
-                    Console.Write("       ");
+                 // Box B mini bars — cols 30-44 (15 wide), rows 2-3
+                 // Row 2: UNB bar (cap 1000, anything above = 100%)
+                 // Row 3: TRN bar (cap 1000)
+                 const int B_COL = 30;
+                 const int B_W   = 15;
+                 const int UNBOUND_CAP  = 1000;
+                 const int TRAINING_CAP = 1000;
 
-                Console.ResetColor();
+                 void DrawMiniBar(int row, string label, int val, int cap, ConsoleColor color)
+                 {
+                     float pct    = val >= 0 ? Math.Clamp((float)val / cap, 0f, 1f) : 0f;
+                     int filled   = val >= 0 ? (int)Math.Round(pct * B_W) : 0;
+                     string text;
+                     if (val < 0)        text = $"{label}: ---";
+                     else if (val > cap) text = $"{label}:{val,4}";
+                     else                text = $"{label}:{(int)(pct * 100),3}%";
+                     text         = text.PadRight(B_W);
+                     if (text.Length > B_W) text = text[..B_W];
+                     Console.SetCursorPosition(B_COL, row);
+                     if (filled > 0)
+                     {
+                         Console.ForegroundColor = ConsoleColor.Black;
+                         Console.BackgroundColor = color;
+                         Console.Write(text[..filled]);
+                     }
+                     if (filled < B_W)
+                     {
+                         Console.ForegroundColor = ConsoleColor.DarkGray;
+                         Console.BackgroundColor = ConsoleColor.Black;
+                         Console.Write(text[filled..]);
+                     }
+                     Console.ResetColor();
+                 }
+
+                 DrawMiniBar(2, "UNB", unboundVal, UNBOUND_CAP,  ConsoleColor.DarkCyan);
+                 DrawMiniBar(3, "TRN", trainingVal, TRAINING_CAP, ConsoleColor.DarkYellow);
+
+                 // XP bar — box C: cols 46-58, rows 2-3 (13 chars wide)
+                 const int XP_COL = 46;
+                 const int XP_W   = 13;
+                 var xpStat = Data.AvatarCondition.GetItemByNum(StatNums.TOUGHERCHANCE);
+
+                 int xpCur = xpStat?.ValueCurrent ?? 0;
+                 int xpMax = xpStat?.ValueRenderMax ?? 0;
+                 float xpPct = (xpMax > 0) ? Math.Clamp((float)xpCur / xpMax, 0f, 1f) : 0f;
+                 int xpFilled = (int)Math.Round(xpPct * XP_W);
+
+                 // Row 2: label "XP" left, percentage right
+                 string xpLabel = xpMax > 0 ? $"XP {(int)(xpPct * 100),3}%" : "XP  ---";
+                 xpLabel = xpLabel.PadRight(XP_W);
+                 Console.SetCursorPosition(XP_COL, 2);
+                 Console.ForegroundColor = ConsoleColor.Black;
+                 Console.BackgroundColor = ConsoleColor.DarkGreen;
+                 Console.Write(xpLabel[..Math.Min(xpFilled, XP_W)]);
+                 if (xpFilled < XP_W)
+                 {
+                     Console.ForegroundColor = ConsoleColor.DarkGray;
+                     Console.BackgroundColor = ConsoleColor.Black;
+                     Console.Write(xpLabel[xpFilled..]);
+                 }
+
+                 // Row 3: cur/max numbers
+                 string xpNums = xpMax > 0 ? $"{xpCur}/{xpMax}" : "---";
+                 xpNums = xpNums.PadRight(XP_W);
+                 if (xpNums.Length > XP_W) xpNums = xpNums[..XP_W];
+                 int xpFilled2 = (int)Math.Round(xpPct * XP_W);
+                 Console.SetCursorPosition(XP_COL, 3);
+                 Console.ForegroundColor = ConsoleColor.Black;
+                 Console.BackgroundColor = ConsoleColor.DarkGreen;
+                 Console.Write(xpNums[..Math.Min(xpFilled2, XP_W)]);
+                 if (xpFilled2 < XP_W)
+                 {
+                     Console.ForegroundColor = ConsoleColor.DarkGray;
+                     Console.BackgroundColor = ConsoleColor.Black;
+                     Console.Write(xpNums[xpFilled2..]);
+                 }
+
+                 Console.ResetColor();
             }
         }
 
@@ -1481,6 +1687,8 @@ namespace Meridian59.TuiClient
         public void DrawLog()
         {
             if (!HasTty) return;
+            // Don't overwrite popups that draw in the left panel
+            if (activePopup != PopupMode.None) return;
 
             int logWidth = 78;
             int logHeight = LogBottom - LOG_FIRST_ROW;
@@ -1722,7 +1930,7 @@ namespace Meridian59.TuiClient
 
                 // ATK/DRAIN/TGT right-justified in the same row
                 string tgtName2 = Data.TargetObject?.Name ?? "";
-                string atkStr2 = autoAttack ? "[ATK:ON]" : "[ATK:OFF]";
+                string atkStr2 = defendMode ? "[DEF:ON]" : (autoAttack ? "[ATK:ON]" : "[ATK:OFF]");
                 string drainStr = drainUnbound ? $"[DRAIN:{drainUnboundSpellName}]" : "";
                 string statusRight = drainStr.Length > 0 ? $"{atkStr2} {drainStr}" : atkStr2;
                 if (tgtName2.Length > 0) statusRight += $" TGT:{tgtName2}";
@@ -1738,7 +1946,7 @@ namespace Meridian59.TuiClient
                 // Override right portion color: red if attacking, cyan if draining, gray otherwise
                 Console.ForegroundColor = ConsoleColor.Cyan;
                 Console.Write(leftPart2);
-                Console.ForegroundColor = autoAttack ? ConsoleColor.Red : (drainUnbound ? ConsoleColor.Cyan : ConsoleColor.DarkGray);
+                Console.ForegroundColor = defendMode ? ConsoleColor.Yellow : (autoAttack ? ConsoleColor.Red : (drainUnbound ? ConsoleColor.Cyan : ConsoleColor.DarkGray));
                 Console.Write(statusRight);
                 Console.ResetColor();
 
@@ -4090,6 +4298,9 @@ namespace Meridian59.TuiClient
 
             if (activePopup == PopupMode.LookDetail)
             {
+                // Guard against the Enter key that opened the popup echoing through and closing it immediately
+                if ((DateTime.UtcNow - lookDetailOpenedAt).TotalMilliseconds < 300)
+                    return;
                 // Any key closes it
                 Data.LookObject.IsVisible = false;
                 Data.LookPlayer.IsVisible = false;
@@ -5062,6 +5273,27 @@ namespace Meridian59.TuiClient
                 return;
             }
 
+            if (text.Equals("deposit", StringComparison.OrdinalIgnoreCase))
+            {
+                var target = Data.TargetObject;
+                if (target == null || !target.Flags.IsOfferable)
+                {
+                    Log("SYS", "No vault target selected. Target a vaultman or banker first.");
+                    return;
+                }
+                var items = Data.InventoryObjects
+                    .Select(i => new ObjectID(i.ID))
+                    .ToArray();
+                if (items.Length == 0)
+                {
+                    Log("SYS", "Inventory is empty.");
+                    return;
+                }
+                SendReqDeposit(new ObjectID(target.ID), items);
+                Log("SYS", $"Depositing {items.Length} item(s) with {target.Name}.");
+                return;
+            }
+
             if (text.Equals("go", StringComparison.OrdinalIgnoreCase))
             {
                 SendReqGo(true);
@@ -5342,6 +5574,40 @@ namespace Meridian59.TuiClient
                 conveyQueue.Clear();
                 if (recorder.IsRecording) recorder.RecordMacro(Data.AvatarObject, "/conveyall stop");
                 Log("SYS", "[Convey] Macro cancelled.");
+                return;
+            }
+
+            if (text.Equals("/defend", StringComparison.OrdinalIgnoreCase))
+            {
+                defendMode = !defendMode;
+                if (defendMode) autoAttack = true;   // attack is always on in defend mode
+                Log("SYS", "Defend mode: " + (defendMode ? "ON (auto-attack enabled)" : "OFF"));
+                return;
+            }
+
+            if (text.StartsWith("/follow", StringComparison.OrdinalIgnoreCase))
+            {
+                string arg = text.Length > 7 ? text[7..].Trim() : "";
+                if (string.IsNullOrEmpty(arg) || arg.Equals("off", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (followTarget != null)
+                        Log("SYS", $"Stopped following {followTarget.Name}.");
+                    followTarget = null;
+                }
+                else
+                {
+                    var target = Data.RoomObjects
+                        .OfType<RoomObject>()
+                        .FirstOrDefault(o => o.Flags.IsPlayer && o.Name.Equals(arg, StringComparison.OrdinalIgnoreCase));
+                    if (target == null)
+                    {
+                        Log("SYS", $"Player '{arg}' not found in this room.");
+                        return;
+                    }
+                    followTarget = target;
+                    autoAttack = true;
+                    Log("SYS", $"Following {followTarget.Name}. Auto-attack ON.");
+                }
                 return;
             }
 
@@ -5713,8 +5979,13 @@ namespace Meridian59.TuiClient
             lastKeyMoveTime = DateTime.Now;
         }
 
-        private void HandleMovement(int dx, int dy)
+        private void HandleMovement(int dx, int dy, bool cancelFollow = true)
         {
+            if (cancelFollow && followTarget != null)
+            {
+                Log("SYS", "Follow cancelled — manual movement.");
+                followTarget = null;
+            }
             var avatar = Data.AvatarObject;
             if (avatar == null) 
             {
@@ -5752,12 +6023,37 @@ namespace Meridian59.TuiClient
                 return;
             }
 
-            // Optimistic movement: move locally, let server rubber-band if wrong.
-            // Matches original clientd3d/move.c behavior.
+            // Optimistic movement with zeno-step wall approach.
+            // Try the full step first. If VerifyMove returns zero (fully blocked),
+            // halve the step and retry — converging toward the wall without overshooting.
+            // Minimum step ~0.004 KOD (7 halvings from 0.25) — close enough for any doorway.
             {
                 var p = avatar.Position3D;
-                p.X += dx * stepSize;
-                p.Z += dy * stepSize;
+                var roo = CurrentRoom;
+
+                const float SCALE   = 16f;   // KOD → FINENESS
+                const float MIN_STEP = 0.004f;
+                float step = stepSize;
+                V2 delta = new V2(0, 0);
+
+                while (step >= MIN_STEP)
+                {
+                    var start3D = new V3((Real)(p.X * SCALE), (Real)(p.Y * SCALE), (Real)(p.Z * SCALE));
+                    var end2D   = new V2((Real)((p.X + dx * step) * SCALE),
+                                        (Real)((p.Z + dy * step) * SCALE));
+                    if (roo != null)
+                        delta = roo.VerifyMove(ref start3D, ref end2D, (Real)(speedByte * SCALE));
+                    else
+                        delta = end2D - new V2(start3D.X, start3D.Z);
+
+                    if (delta.X != 0.0 || delta.Y != 0.0)
+                        break;   // got some movement — use it
+
+                    step *= 0.5f;  // blocked — try a smaller step
+                }
+
+                p.X += (Real)(delta.X / SCALE);
+                p.Z += (Real)(delta.Y / SCALE);
                 avatar.Position3D = p;
                 avatar.HorizontalSpeed = speedByte;
                 SendReqMoveMessage(true);

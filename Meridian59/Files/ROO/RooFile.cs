@@ -1749,13 +1749,13 @@ namespace Meridian59.Files.ROO
                         // NEW: Check if the line of the wall intersects a circle consisting
                         // of player x, y and radius of min distance allowed to walls. Intersection
                         // includes the wall being totally inside the circle.
-                        V2 p1 = wall.P1;
-                        V2 p2 = wall.P2;
-                        if (!MathUtil.IntersectOrInsideLineCircle(ref p1, ref p2, ref q, GeometryConstants.WALLMINDISTANCE))
-                        {
-                           wall = wall.NextWallInPlane;
-                           continue;
-                        }
+                         V2 p1 = wall.P1;
+                         V2 p2 = wall.P2;
+                         if (!MathUtil.IntersectOrInsideLineCircle(ref p1, ref p2, ref q, GeometryConstants.WALLMINDISTANCE))
+                         {
+                            wall = wall.NextWallInPlane;
+                            continue;
+                         }
 
                         // set from and to sector / side
                         if (distS > 0.0f)

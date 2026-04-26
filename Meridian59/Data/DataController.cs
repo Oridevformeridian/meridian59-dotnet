@@ -85,7 +85,7 @@ namespace Meridian59.Data
         protected RoomObject avatarObject;
         protected ObjectBase targetObject;       
         protected uint targetID = UInt32.MaxValue;
-        protected bool selfTarget;
+         protected bool selfTarget;
         protected bool isResting;
         protected ushort movementSpeedPercent;
 
@@ -2242,19 +2242,7 @@ namespace Meridian59.Data
             if (avatar == null)
             {
                 Log("DEBUG", "AVATAR NOT FOUND in RoomContents object list!");
-                // Create a temporary avatar object if not found in list (should not happen normally)
                 avatar = new RoomObject() { ID = AvatarID, IsAvatar = true };
-                avatar.CoordinateX = roomInformation.PosX;
-                avatar.CoordinateY = roomInformation.PosY;
-            }
-            else
-            {
-                // Force coordinates from RoomInfo if model came in with 0,0
-                if (avatar.CoordinateX == 0 && avatar.CoordinateY == 0)
-                {
-                    avatar.CoordinateX = roomInformation.PosX;
-                    avatar.CoordinateY = roomInformation.PosY;
-                }
             }
 
             // now add the avatar first
@@ -2429,55 +2417,61 @@ namespace Meridian59.Data
                 roomObject.AngleUnits = Message.Angle;               
         }
 
-        protected virtual void HandlePlayer(PlayerMessage Message)
-        {
-            AvatarID = Message.RoomInfo.AvatarID;
+         protected virtual void HandlePlayer(PlayerMessage Message)
+         {
+             AvatarID = Message.RoomInfo.AvatarID;
 
-            // detach old sectormove listener
-            if (RoomInformation.ResourceRoom != null)
-                RoomInformation.ResourceRoom.SectorMoved -= OnRoomSectorMoved;
+             bool roomChanged = Message.RoomInfo.RoomID != RoomInformation.RoomID;
 
-            // update
-            RoomInformation.UpdateFromModel(Message.RoomInfo, true);
-         
-            // attach new sectormove listener
-            if (RoomInformation.ResourceRoom != null)
-                RoomInformation.ResourceRoom.SectorMoved += OnRoomSectorMoved;
+             // detach old sectormove listener
+             if (RoomInformation.ResourceRoom != null)
+                 RoomInformation.ResourceRoom.SectorMoved -= OnRoomSectorMoved;
 
-            // Update avatar position if it exists
-            if (AvatarObject != null)
-            {
-                AvatarObject.CoordinateX = Message.RoomInfo.PosX;
-                AvatarObject.CoordinateY = Message.RoomInfo.PosY;
-                if (RoomInformation.ResourceRoom != null)
-                    AvatarObject.UpdateHeightPosition(RoomInformation);
-            }
+             // update
+             RoomInformation.UpdateFromModel(Message.RoomInfo, true);
+          
+             // attach new sectormove listener
+             if (RoomInformation.ResourceRoom != null)
+                 RoomInformation.ResourceRoom.SectorMoved += OnRoomSectorMoved;
 
-            // clear roombuffs
-            RoomBuffs.Clear();
+             // Update avatar position if it exists
+             if (AvatarObject != null)
+             {
+                 AvatarObject.CoordinateX = Message.RoomInfo.PosX;
+                 AvatarObject.CoordinateY = Message.RoomInfo.PosY;
+                 if (RoomInformation.ResourceRoom != null)
+                     AvatarObject.UpdateHeightPosition(RoomInformation);
+             }
 
-            // clear projectiles
-            Projectiles.Clear();
+             // Only clear room-scoped state on actual room transition
+             if (roomChanged)
+             {
+                 // clear roombuffs
+                 RoomBuffs.Clear();
 
-            // reset target
-            TargetID = UInt32.MaxValue;
+                 // clear projectiles
+                 Projectiles.Clear();
 
-            // clear roomobjects
-            RoomObjects.Clear();
+                 // reset target
+                 TargetID = UInt32.MaxValue;
 
-            // clear trade & buyinfo (also hides)
-            Trade.Clear(true);
-            Buy.Clear(true);
-            QuestUIInfo.Clear(true);
-            NewsGroup.Clear(true);
-            LookObject.Clear(true);
-            LookPlayer.Clear(true);
-            LookSpell.Clear(true);
-            LookSkill.Clear(true);
+                 // clear roomobjects
+                 RoomObjects.Clear();
 
-            // reset avatar object
-            AvatarObject = null;
-        }
+                 // clear trade & buyinfo (also hides)
+                 Trade.Clear(true);
+                 Buy.Clear(true);
+                 QuestUIInfo.Clear(true);
+                 NewsGroup.Clear(true);
+                 LookObject.Clear(true);
+                 LookPlayer.Clear(true);
+                 LookSpell.Clear(true);
+                 LookSkill.Clear(true);
+
+                 // reset avatar object
+                 AvatarObject = null;
+             }
+         }
 
         protected virtual void HandleBackground(BackgroundMessage Message)
         {

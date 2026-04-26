@@ -241,9 +241,9 @@ namespace Meridian59.TuiClient
                         if (ax >= 0 && ax < width && ay >= 1 && ay < height)
                         {
                             if (ann.Type == "Door")
-                                nextBuffer.Set(ax, ay, 'D', 1.0f, ConsoleColor.Yellow, ConsoleColor.Black);
+                                nextBuffer.Set(ax, ay, 'D', 1.0f, ConsoleColor.White, ConsoleColor.DarkYellow);
                             else
-                                nextBuffer.Set(ax, ay, 'S', 1.0f, ConsoleColor.Cyan, ConsoleColor.Black);
+                                nextBuffer.Set(ax, ay, 'S', 1.0f, ConsoleColor.White, ConsoleColor.DarkYellow);
                         }
                     }
                 }
