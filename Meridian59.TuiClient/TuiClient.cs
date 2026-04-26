@@ -45,7 +45,7 @@ namespace Meridian59.TuiClient
 
     public enum NewCharTab { Stats = 0, Skills = 1, Spells = 2, Looks = 3 }
 
-    public enum CharTab { Stats = 0, Skills = 1, Spells = 2, Inventory = 3 }
+    public enum CharTab { Stats = 0, Skills = 1, Spells = 2, Inventory = 3, Description = 4 }
 
     public enum CharCreationState
     {
@@ -122,6 +122,11 @@ namespace Meridian59.TuiClient
         private CharTab charTab = CharTab.Stats;
         private int charScrollOffset = 0;
         private int charSelectionIndex = 0;
+
+        // Description edit state
+        private bool descEditMode = false;
+        private string descEditBuffer = "";
+        private int descEditCursor = 0;
 
         // Login dialog state
         private enum LoginField { Username, Password }
@@ -2345,6 +2350,98 @@ namespace Meridian59.TuiClient
             }
         }
 
+        private void DrawCharDescription(int contentX, int contentY, int contentW, int contentH)
+        {
+            string currentDesc = Data.LookPlayer.IsVisible ? Data.LookPlayer.Message?.FullString : "(No description set)";
+
+            if (!descEditMode)
+            {
+                // View mode — show current description with word-wrap
+                var lines = new List<string>();
+                foreach (var raw in currentDesc.Split('\n'))
+                {
+                    string remaining = raw.TrimEnd();
+                    if (remaining.Length == 0) { lines.Add(""); continue; }
+                    while (remaining.Length > contentW)
+                    {
+                        int cut = remaining.LastIndexOf(' ', contentW);
+                        if (cut <= 0) cut = contentW;
+                        lines.Add(remaining[..cut].TrimEnd());
+                        remaining = remaining[cut..].TrimStart();
+                    }
+                    if (remaining.Length > 0) lines.Add(remaining);
+                }
+                if (lines.Count == 0) lines.Add("");
+
+                for (int i = 0; i < contentH; i++)
+                {
+                    Console.SetCursorPosition(contentX, contentY + i);
+                    if (i < lines.Count)
+                        Console.Write(SafeLine(lines[i].PadRight(contentW), contentW));
+                    else
+                        Console.Write(new string(' ', contentW));
+                }
+                return;
+            }
+
+            // Edit mode — show buffer with cursor
+            string display = descEditBuffer.Length > 0 ? descEditBuffer : "(Type your description...)";
+            var editLines = new List<string>();
+            foreach (var raw in display.Split('\n'))
+            {
+                string remaining = raw;
+                if (remaining.Length == 0) { editLines.Add(""); continue; }
+                while (remaining.Length > contentW)
+                {
+                    int cut = remaining.LastIndexOf(' ', contentW);
+                    if (cut <= 0) cut = contentW;
+                    editLines.Add(remaining[..cut].TrimEnd());
+                    remaining = remaining[cut..].TrimStart();
+                }
+                if (remaining.Length > 0) editLines.Add(remaining);
+            }
+            if (editLines.Count == 0) editLines.Add("");
+
+            // Calculate cursor position (approximate — based on linear buffer, not wrapped)
+            int cursorLine = 0, cursorCol = 0;
+            int running = 0;
+            for (int i = 0; i < editLines.Count; i++)
+            {
+                if (running + editLines[i].Length >= descEditCursor)
+                {
+                    cursorLine = i;
+                    cursorCol = descEditCursor - running;
+                    break;
+                }
+                running += editLines[i].Length + 1; // +1 for newline
+            }
+            if (cursorLine >= editLines.Count) { cursorLine = editLines.Count - 1; cursorCol = editLines[cursorLine].Length; }
+
+            for (int i = 0; i < contentH; i++)
+            {
+                Console.SetCursorPosition(contentX, contentY + i);
+                if (i < editLines.Count)
+                {
+                    Console.ForegroundColor = ConsoleColor.White;
+                    Console.Write(SafeLine(editLines[i].PadRight(contentW), contentW));
+                    Console.ResetColor();
+                }
+                else
+                    Console.Write(new string(' ', contentW));
+            }
+
+            // Draw cursor
+            if (cursorLine < contentH)
+            {
+                Console.SetCursorPosition(contentX + cursorCol, contentY + cursorLine);
+                Console.BackgroundColor = ConsoleColor.White;
+                Console.ForegroundColor = ConsoleColor.Black;
+                char cursorChar = descEditCursor < descEditBuffer.Length ? descEditBuffer[descEditCursor] : ' ';
+                Console.Write(cursorChar);
+                Console.ResetColor();
+            }
+        }
+
         private void DrawCharSheet(int startX, int startY, int width, int height)
         {
             int w = Console.WindowWidth;
@@ -2367,9 +2464,10 @@ namespace Meridian59.TuiClient
             }
 
             // Bottom border with centred footer hint
-            string footerText = charTab == CharTab.Spells   ? " [Esc:Close] [←/→:Tab] [↑↓:Select] [Enter:Cast] " :
-                                charTab == CharTab.Inventory ? " [Esc:Close] [←/→:Tab] [↑↓:Select] [Enter:Use] [D:Drop] [L:Look] " :
-                                                               " [Esc:Close] [←/→:Tab] [↑↓:Scroll] ";
+            string footerText = charTab == CharTab.Spells      ? " [Esc:Close] [←/→:Tab] [↑↓:Select] [Enter:Cast] " :
+                                charTab == CharTab.Inventory   ? " [Esc:Close] [←/→:Tab] [↑↓:Select] [Enter:Use] [D:Drop] [L:Look] " :
+                                charTab == CharTab.Description ? " [Esc:Close] [←/→:Tab] [E:Edit] [Enter:Save] " :
+                                                                 " [Esc:Close] [←/→:Tab] [↑↓:Scroll] ";
             if (footerText.Length > width - 4) footerText = footerText[..(width - 4)];
             int flPad = (width - 2 - footerText.Length) / 2;
             int frPad = width - 2 - footerText.Length - flPad;
@@ -2378,7 +2476,8 @@ namespace Meridian59.TuiClient
 
             // Tab bar (row startY+1)
             var tabs = new[] { ("STATS", CharTab.Stats), ("SKILLS", CharTab.Skills),
-                               ("SPELLS", CharTab.Spells), ("INV", CharTab.Inventory) };
+                               ("SPELLS", CharTab.Spells), ("INV", CharTab.Inventory),
+                               ("DESC", CharTab.Description) };
             int tabX = startX + 1;
             foreach (var (label, tab) in tabs)
             {
@@ -2406,10 +2505,11 @@ namespace Meridian59.TuiClient
 
             switch (charTab)
             {
-                case CharTab.Stats:     DrawCharStats(contentX, contentY, contentW, contentH);     break;
-                case CharTab.Skills:    DrawCharSkills(contentX, contentY, contentW, contentH);    break;
-                case CharTab.Spells:    DrawCharSpells(contentX, contentY, contentW, contentH);    break;
-                case CharTab.Inventory: DrawCharInventory(contentX, contentY, contentW, contentH); break;
+                case CharTab.Stats:       DrawCharStats(contentX, contentY, contentW, contentH);       break;
+                case CharTab.Skills:      DrawCharSkills(contentX, contentY, contentW, contentH);      break;
+                case CharTab.Spells:      DrawCharSpells(contentX, contentY, contentW, contentH);      break;
+                case CharTab.Inventory:   DrawCharInventory(contentX, contentY, contentW, contentH);   break;
+                case CharTab.Description: DrawCharDescription(contentX, contentY, contentW, contentH); break;
             }
         }
 
@@ -4374,42 +4474,64 @@ namespace Meridian59.TuiClient
                         SetActivePopup(PopupMode.None);
                         popupJustClosed = true;
                         charScrollOffset = 0;
+                        descEditMode = false;
                         DrawMap();
                         break;
                     case ConsoleKey.LeftArrow:
                         charTab = (CharTab)Math.Max(0, (int)charTab - 1);
                         charScrollOffset = 0;
                         charSelectionIndex = 0;
+                        descEditMode = false;
                         DrawMap();
                         break;
                     case ConsoleKey.RightArrow:
-                        charTab = (CharTab)Math.Min(3, (int)charTab + 1);
+                        charTab = (CharTab)Math.Min(4, (int)charTab + 1);
                         charScrollOffset = 0;
                         charSelectionIndex = 0;
+                        descEditMode = false;
                         DrawMap();
                         break;
                     case ConsoleKey.UpArrow:
-                        if (selectable) charSelectionIndex = Math.Max(0, charSelectionIndex - 1);
+                        if (descEditMode)
+                        {
+                            // Move cursor left in buffer
+                            descEditCursor = Math.Max(0, descEditCursor - 1);
+                        }
+                        else if (selectable) charSelectionIndex = Math.Max(0, charSelectionIndex - 1);
                         else charScrollOffset = Math.Max(0, charScrollOffset - 1);
                         DrawMap();
                         break;
                     case ConsoleKey.DownArrow:
-                        if (selectable) charSelectionIndex++;
+                        if (descEditMode)
+                        {
+                            // Move cursor right in buffer
+                            descEditCursor = Math.Min(descEditBuffer.Length, descEditCursor + 1);
+                        }
+                        else if (selectable) charSelectionIndex++;
                         else charScrollOffset++;
                         DrawMap();
                         break;
                     case ConsoleKey.PageUp:
-                        if (selectable) charSelectionIndex = Math.Max(0, charSelectionIndex - pageSize);
+                        if (descEditMode) descEditCursor = Math.Max(0, descEditCursor - 40);
+                        else if (selectable) charSelectionIndex = Math.Max(0, charSelectionIndex - pageSize);
                         else charScrollOffset = Math.Max(0, charScrollOffset - pageSize);
                         DrawMap();
                         break;
                     case ConsoleKey.PageDown:
-                        if (selectable) charSelectionIndex += pageSize;
+                        if (descEditMode) descEditCursor = Math.Min(descEditBuffer.Length, descEditCursor + 40);
+                        else if (selectable) charSelectionIndex += pageSize;
                         else charScrollOffset += pageSize;
                         DrawMap();
                         break;
                     case ConsoleKey.Enter:
-                        if (charTab == CharTab.Spells)
+                         if (charTab == CharTab.Description && descEditMode)
+                         {
+                             SendChangeDescription(descEditBuffer);
+                             Log("SYS", "Description updated.");
+                             descEditMode = false;
+                             DrawMap();
+                         }
+                        else if (charTab == CharTab.Spells)
                         {
                             var schoolOrder = new[] {
                                 SchoolType.Shalille, SchoolType.Qor, SchoolType.Kraanan,
@@ -4503,6 +4625,68 @@ namespace Meridian59.TuiClient
                                 Log("SYS", $"INV DBG: {litem.Name} IsInUse={litem.IsInUse}");
                                 SendReqLookMessage(litem.ID);
                             }
+                        }
+                        break;
+
+                    case ConsoleKey.E:
+                        if (charTab == CharTab.Description)
+                        {
+                            if (!descEditMode)
+                            {
+                                // Enter edit mode — preload current description
+                                descEditBuffer = Data.LookPlayer.IsVisible ? Data.LookPlayer.Message?.FullString : "";
+                                descEditCursor = descEditBuffer.Length;
+                                descEditMode = true;
+                            }
+                            else
+                            {
+                                // Exit edit mode without saving
+                                descEditMode = false;
+                            }
+                            DrawMap();
+                        }
+                        break;
+
+                    case ConsoleKey.Backspace:
+                        if (charTab == CharTab.Description && descEditMode && descEditCursor > 0)
+                        {
+                            descEditBuffer = descEditBuffer.Remove(descEditCursor - 1, 1);
+                            descEditCursor--;
+                            DrawMap();
+                        }
+                        break;
+
+                    case ConsoleKey.Delete:
+                        if (charTab == CharTab.Description && descEditMode && descEditCursor < descEditBuffer.Length)
+                        {
+                            descEditBuffer = descEditBuffer.Remove(descEditCursor, 1);
+                            DrawMap();
+                        }
+                        break;
+
+                    case ConsoleKey.Home:
+                        if (charTab == CharTab.Description && descEditMode)
+                        {
+                            descEditCursor = 0;
+                            DrawMap();
+                        }
+                        break;
+
+                    case ConsoleKey.End:
+                        if (charTab == CharTab.Description && descEditMode)
+                        {
+                            descEditCursor = descEditBuffer.Length;
+                            DrawMap();
+                        }
+                        break;
+
+                    default:
+                        // Text input when editing description
+                        if (charTab == CharTab.Description && descEditMode && !char.IsControl(key.KeyChar))
+                        {
+                            descEditBuffer = descEditBuffer.Insert(descEditCursor, key.KeyChar.ToString());
+                            descEditCursor++;
+                            DrawMap();
                         }
                         break;
                 }
